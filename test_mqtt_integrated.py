@@ -187,9 +187,8 @@ def main():
     print(f"  - Ou entrez une autre adresse (ex: test.mosquitto.org)")
     
     try:
-        broker_address = input("\nAdresse du broker: ").strip()
-        if not broker_address:
-            broker_address = local_ip
+        broker_address = "test.mosquitto.org"
+        print(f"\nUtilisation du broker de test : {broker_address}")
         
         print(f"\n🔗 Connexion au broker: {broker_address}:{MQTT_PORT}")
         
