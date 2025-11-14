@@ -8,7 +8,6 @@
 #include <Preferences.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <ETH.h>
 #include <LittleFS.h>
 
 #include "config.h"
@@ -24,10 +23,11 @@ NTPClient timeClient(ntpUDP);
 
 Config config;
 IOPin ioPins[MAX_IOS];
+AccessLog accessLogs[100];   // Max 100 logs
 int ioPinCount = 0;
 
 unsigned long lastMqttReconnect = 0;
-bool eth_connected = false;
+
 
 // ===== PROTOTYPES =====
 void loadConfig();
@@ -41,8 +41,6 @@ void setupMQTT();
 void reconnectMQTT();
 void publishMQTT(const char* topic, const char* payload);
 void setupNTP();
-void setupEthernet();
-void WiFiEvent(WiFiEvent_t event);
 
 // ===== SETUP =====
 void setup() {
@@ -57,23 +55,17 @@ void setup() {
   loadConfig();
   loadIOs();
 
-  // Setup Ethernet
-  setupEthernet();
-
   // Setup WiFi
-  if (!eth_connected) {
-    WiFi.onEvent(WiFiEvent);
-    wifiManager.setConfigPortalTimeout(180);
-    wifiManager.setConnectTimeout(30);
-    if (!wifiManager.autoConnect("ESP32-IO-Setup")) {
-      Serial.println("Failed to connect to WiFi, restarting...");
-      delay(5000);
-      ESP.restart();
-    }
-    Serial.println("WiFi connected.");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
+  wifiManager.setConfigPortalTimeout(180);
+  wifiManager.setConnectTimeout(30);
+  if (!wifiManager.autoConnect("ESP32-IO-Setup")) {
+    Serial.println("Failed to connect to WiFi, restarting...");
+    delay(5000);
+    ESP.restart();
   }
+  Serial.println("WiFi connected.");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
 
   // Apply I/O pin configurations
   applyIOPinModes();
@@ -104,7 +96,7 @@ void setup() {
 
 // ===== LOOP =====
 void loop() {
-  if (WiFi.status() == WL_CONNECTED || eth_connected) {
+  if (WiFi.status() == WL_CONNECTED) {
     if (!mqttClient.connected()) {
       long now = millis();
       if (now - lastMqttReconnect > 5000) {
@@ -120,49 +112,6 @@ void loop() {
   ElegantOTA.loop();
   delay(10);
 }
-
-// ===== NETWORK SETUP =====
-void WiFiEvent(WiFiEvent_t event) {
-  switch (event) {
-    case SYSTEM_EVENT_ETH_START:
-      Serial.println("ETH Started");
-      ETH.setHostname("esp32-ethernet");
-      break;
-    case SYSTEM_EVENT_ETH_CONNECTED:
-      Serial.println("ETH Connected");
-      break;
-    case SYSTEM_EVENT_ETH_GOT_IP:
-      Serial.print("ETH MAC: ");
-      Serial.print(ETH.macAddress());
-      Serial.print(", IPv4: ");
-      Serial.print(ETH.localIP());
-      if (ETH.fullDuplex()) {
-        Serial.print(", FULL_DUPLEX");
-      }
-      Serial.print(", ");
-      Serial.print(ETH.linkSpeed());
-      Serial.println("Mbps");
-      eth_connected = true;
-      // Use Ethernet for MQTT client
-      mqttClient.setClient(wifiClient); // Should be an ETH client, need to adjust
-      break;
-    case SYSTEM_EVENT_ETH_DISCONNECTED:
-      Serial.println("ETH Disconnected");
-      eth_connected = false;
-      // Revert to WiFi client if needed
-      mqttClient.setClient(wifiClient);
-      break;
-    default:
-      break;
-  }
-}
-
-void setupEthernet() {
-  // To be implemented with specific Ethernet module (e.g., LAN8720)
-  // ETH.begin(ETH_ADDR, ETH_POWER_PIN, ETH_MDC_PIN, ETH_MDIO_PIN, ETH_TYPE, ETH_CLK_MODE);
-  Serial.println("Ethernet setup placeholder. Please configure for your hardware.");
-}
-
 
 // ===== CONFIGURATION FUNCTIONS =====
 void loadConfig() {
@@ -355,15 +304,4 @@ void publishMQTT(const char* sub_topic, const char* payload) {
         snprintf(fullTopic, sizeof(fullTopic), "%s/%s", config.mqttTopic, sub_topic);
         mqttClient.publish(fullTopic, payload);
     }
-}
-
-// ===== WEB SERVER FUNCTIONS =====
-void setupWebServer() {
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", "ESP32 Generic IO Controller is running.");
-  });
-
-  // More web routes for configuration will be added here
-  
-  Serial.println("Web server setup.");
 }

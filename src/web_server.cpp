@@ -1,149 +1,189 @@
-#include <ESPAsyncWebServer.h>
-#include <ArduinoJson.h>
+#include "web_server.h"
 #include "config.h"
+#include <ElegantOTA.h>
+#include <PubSubClient.h>
 
-// External variables declared in main.cpp
-extern AsyncWebServer server;
 extern Config config;
-extern IOPin ioPins[MAX_IOS];
+extern IOPin ioPins[];
 extern int ioPinCount;
+extern PubSubClient mqttClient;
+extern AccessLog accessLogs[];
 
-// External functions declared in main.cpp
 extern void saveConfig();
 extern void saveIOs();
-extern void applyIOPinModes();
-extern void publishMQTT(const char* sub_topic, const char* payload);
-
-// Forward declarations
-void handleGetConfig(AsyncWebServerRequest *request);
-void handleSaveConfig(AsyncWebServerRequest *request);
-void handleGetIOs(AsyncWebServerRequest *request);
-void handleSaveIOs(AsyncWebServerRequest *request);
-void handleGetStatus(AsyncWebServerRequest *request);
-void handleNotFound(AsyncWebServerRequest *request);
+extern void publishMQTT(const char* topic, const char* payload);
 
 void setupWebServer() {
-    // Route to get current configuration
-    server.on("/api/config", HTTP_GET, handleGetConfig);
-
-    // Route to save configuration
-    server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL, handleSaveConfig);
-
-    // Route to get I/O pin configuration
-    server.on("/api/ios", HTTP_GET, handleGetIOs);
-
-    // Route to save I/O pin configuration
-    server.on("/api/ios", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL, handleSaveIOs);
-
-    // Route to get system status
-    server.on("/api/status", HTTP_GET, handleGetStatus);
-
-    // Serve the main web page
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-
-    // Handle not found
-    server.onNotFound(handleNotFound);
-}
-
-void handleGetConfig(AsyncWebServerRequest *request) {
-    StaticJsonDocument<512> doc;
+  // Page principale
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/html", index_html);
+  });
+  
+  // API - Statut système
+  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
+    JsonDocument doc;
+    doc["mqtt"] = mqttClient.connected();
+    doc["wifi"] = WiFi.status() == WL_CONNECTED;
+    doc["ip"] = WiFi.localIP().toString();
+    
+    // Add IOs status
+    JsonArray ios = doc["ios"].to<JsonArray>();
+    for (int i = 0; i < ioPinCount; i++) {
+      JsonObject io = ios.add<JsonObject>();
+      io["name"] = ioPins[i].name;
+      io["pin"] = ioPins[i].pin;
+      io["mode"] = ioPins[i].mode;
+      io["state"] = ioPins[i].state;
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+  
+  // API - Contrôle IO (set output state)
+  server.on("/api/io/set", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      JsonDocument doc;
+      deserializeJson(doc, (const char*)data);
+      
+      String ioName = doc["name"].as<String>();
+      bool state = doc["state"].as<bool>();
+      
+      // Find IO by name
+      bool found = false;
+      for (int i = 0; i < ioPinCount; i++) {
+        if (String(ioPins[i].name) == ioName) {
+          if (ioPins[i].mode == 2) { // OUTPUT
+            digitalWrite(ioPins[i].pin, state);
+            ioPins[i].state = state;
+            found = true;
+            
+            // Publish to MQTT
+            char topic[128];
+            snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
+            publishMQTT(topic, state ? "1" : "0");
+            
+            request->send(200, "application/json", "{\"message\":\"IO mis à jour\"}");
+          } else {
+            request->send(400, "application/json", "{\"error\":\"Cet IO n'est pas une sortie\"}");
+            return;
+          }
+          break;
+        }
+      }
+      
+      if (!found) {
+        request->send(404, "application/json", "{\"error\":\"IO non trouvé\"}");
+      }
+    }
+  );
+  
+  // API - Get IOs configuration
+  server.on("/api/ios", HTTP_GET, [](AsyncWebServerRequest *request){
+    JsonDocument doc;
+    JsonArray ios = doc["ios"].to<JsonArray>();
+    
+    for (int i = 0; i < ioPinCount; i++) {
+      JsonObject io = ios.add<JsonObject>();
+      io["name"] = ioPins[i].name;
+      io["pin"] = ioPins[i].pin;
+      io["mode"] = ioPins[i].mode;
+      io["state"] = ioPins[i].state;
+      io["defaultState"] = ioPins[i].defaultState;
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+  
+  // API - Save IOs configuration
+  server.on("/api/ios", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      JsonDocument doc;
+      deserializeJson(doc, (const char*)data);
+      
+      JsonArray ios = doc["ios"].as<JsonArray>();
+      ioPinCount = 0;
+      
+      for (JsonObject io : ios) {
+        if (ioPinCount < MAX_IOS) {
+          ioPins[ioPinCount].pin = io["pin"];
+          strlcpy(ioPins[ioPinCount].name, io["name"], 32);
+          ioPins[ioPinCount].mode = io["mode"];
+          ioPins[ioPinCount].defaultState = io["defaultState"] | false;
+          ioPinCount++;
+        }
+      }
+      
+      saveIOs();
+      
+      request->send(200, "application/json", "{\"message\":\"Configuration IOs enregistrée\"}");
+    }
+  );
+  
+  
+  // API - Récupérer les logs
+  server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest *request){
+    JsonDocument doc;
+    JsonArray logs = doc["logs"].to<JsonArray>();
+    
+    for (int i = 0; i < 100; i++) {
+      if (accessLogs[i].timestamp > 0) {
+        JsonObject log = logs.add<JsonObject>();
+        log["timestamp"] = accessLogs[i].timestamp;
+        log["code"] = accessLogs[i].code;
+        log["granted"] = accessLogs[i].granted;
+        log["type"] = accessLogs[i].type;
+      }
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+  
+  // API - Récupérer la configuration
+  server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
+    JsonDocument doc;
     doc["mqttServer"] = config.mqttServer;
     doc["mqttPort"] = config.mqttPort;
     doc["mqttUser"] = config.mqttUser;
     doc["mqttTopic"] = config.mqttTopic;
-    doc["ntpServer"] = config.ntpServer;
-    doc["gmtOffset"] = config.gmtOffset_sec;
-    doc["daylightOffset"] = config.daylightOffset_sec;
-
-    String output;
-    serializeJson(doc, output);
-    request->send(200, "application/json", output);
-}
-
-void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-    if (index == 0) {
-        StaticJsonDocument<512> doc;
-        DeserializationError error = deserializeJson(doc, (const char*)data, len);
-        if (error) {
-            request->send(400, "text/plain", "Invalid JSON");
-            return;
-        }
-
-        strlcpy(config.mqttServer, doc["mqttServer"] | "", sizeof(config.mqttServer));
-        config.mqttPort = doc["mqttPort"] | 1883;
-        strlcpy(config.mqttUser, doc["mqttUser"] | "", sizeof(config.mqttUser));
-        strlcpy(config.mqttPassword, doc["mqttPassword"] | "", sizeof(config.mqttPassword)); // Note: password might not be in the form
-        strlcpy(config.mqttTopic, doc["mqttTopic"] | "esp32/io", sizeof(config.mqttTopic));
-        strlcpy(config.ntpServer, doc["ntpServer"] | "pool.ntp.org", sizeof(config.ntpServer));
-        config.gmtOffset_sec = doc["gmtOffset"] | 3600;
-        config.daylightOffset_sec = doc["daylightOffset"] | 3600;
-
-        saveConfig();
-        request->send(200, "text/plain", "Configuration saved. Restarting...");
-        delay(1000);
-        ESP.restart();
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+  
+  // API - Enregistrer la configuration
+  server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      JsonDocument doc;
+      deserializeJson(doc, (const char*)data);
+    
+      config.mqttPort = doc["mqttPort"] | 1883;
+      
+      if (doc["mqttServer"].is<const char*>()) 
+        strlcpy(config.mqttServer, doc["mqttServer"], 64);
+      if (doc["mqttUser"].is<const char*>()) 
+        strlcpy(config.mqttUser, doc["mqttUser"], 32);
+      if (doc["mqttPassword"].is<const char*>()) 
+        strlcpy(config.mqttPassword, doc["mqttPassword"], 32);
+      if (doc["mqttTopic"].is<const char*>()) 
+        strlcpy(config.mqttTopic, doc["mqttTopic"], 64);
+      if (doc["adminPassword"].is<const char*>()) 
+        strlcpy(config.adminPassword, doc["adminPassword"], 32);
+      
+      saveConfig();
+      
+      request->send(200, "application/json", "{\"message\":\"Configuration enregistrée\"}");
     }
-}
-
-void handleGetIOs(AsyncWebServerRequest *request) {
-    StaticJsonDocument<1024> doc;
-    JsonArray ioArray = doc.to<JsonArray>();
-
-    for (int i = 0; i < ioPinCount; i++) {
-        JsonObject io = ioArray.createNestedObject();
-        io["pin"] = ioPins[i].pin;
-        io["name"] = ioPins[i].name;
-        io["mode"] = ioPins[i].mode;
-        io["state"] = ioPins[i].state;
-        io["defaultState"] = ioPins[i].defaultState;
-    }
-
-    String output;
-    serializeJson(doc, output);
-    request->send(200, "application/json", output);
-}
-
-void handleSaveIOs(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-    if (index == 0) {
-        StaticJsonDocument<1024> doc;
-        DeserializationError error = deserializeJson(doc, (const char*)data, len);
-        if (error) {
-            request->send(400, "text/plain", "Invalid JSON");
-            return;
-        }
-
-        JsonArray ioArray = doc.as<JsonArray>();
-        ioPinCount = 0;
-        for (JsonObject io : ioArray) {
-            if (ioPinCount < MAX_IOS) {
-                ioPins[ioPinCount].pin = io["pin"];
-                strlcpy(ioPins[ioPinCount].name, io["name"], sizeof(ioPins[ioPinCount].name));
-                ioPins[ioPinCount].mode = io["mode"];
-                ioPins[ioPinCount].defaultState = io["defaultState"];
-                ioPinCount++;
-            }
-        }
-        saveIOs();
-        applyIOPinModes();
-        request->send(200, "text/plain", "I/O configuration saved.");
-    }
-}
-
-void handleGetStatus(AsyncWebServerRequest *request) {
-    StaticJsonDocument<512> doc;
-    doc["wifi_status"] = (WiFi.status() == WL_CONNECTED) ? "Connected" : "Disconnected";
-    doc["ip"] = WiFi.localIP().toString();
-    doc["eth_status"] = eth_connected ? "Connected" : "Disconnected";
-    if(eth_connected) doc["eth_ip"] = ETH.localIP().toString();
-    doc["mqtt_status"] = mqttClient.connected() ? "Connected" : "Disconnected";
-    doc["time"] = timeClient.getFormattedTime();
-    doc["heap"] = ESP.getFreeHeap();
-
-    String output;
-    serializeJson(doc, output);
-    request->send(200, "application/json", output);
-}
-
-void handleNotFound(AsyncWebServerRequest *request) {
-    request->send(404, "text/plain", "Not found");
+  );
+  
+  // ElegantOTA pour les mises à jour
+  ElegantOTA.begin(&server);
+  
+  Serial.println("Web server routes configured");
 }

@@ -5,6 +5,12 @@
 
 #define MAX_IOS 20
 
+
+// ===== CONFIGURATION PINS =====
+#define RELAY_K1        16
+#define RELAY_K2       17
+
+// ===== STRUCTURES =====
 // Structure for a single configurable I/O pin
 struct IOPin {
   uint8_t pin;
@@ -13,6 +19,15 @@ struct IOPin {
   bool state;   // Current state (for outputs) or last read state (for inputs)
   bool defaultState; // Default state at boot for outputs
 };
+
+
+struct AccessLog {
+  unsigned long timestamp;
+  uint32_t code;
+  bool granted;
+  uint8_t type;
+};
+
 
 // Main configuration structure
 struct Config {
