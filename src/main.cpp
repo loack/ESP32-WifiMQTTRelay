@@ -28,6 +28,9 @@ int ioPinCount = 0;
 
 unsigned long lastMqttReconnect = 0;
 
+// Bouton pour reset WiFi (bouton BOOT sur ESP32)
+#define RESET_WIFI_BUTTON 0
+#define STATUS_LED 23
 
 // ===== PROTOTYPES =====
 void loadConfig();
@@ -41,34 +44,151 @@ void setupMQTT();
 void reconnectMQTT();
 void publishMQTT(const char* topic, const char* payload);
 void setupNTP();
+void blinkStatusLED(int times, int delayMs);
+
+
+// ===== FONCTION RESET WiFi =====
+// Fonction pour détecter 3 appuis sur le bouton BOOT
+bool checkTriplePress() {
+  int pressCount = 0;
+  unsigned long startTime = millis();
+  unsigned long lastPressTime = 0;
+  bool lastState = HIGH;
+  
+  Serial.println("\n⏱ WiFi Reset Check (5 seconds window)...");
+  Serial.println("Press BOOT button 3 times to reset WiFi credentials");
+  
+  while (millis() - startTime < 5000) {  // 5 secondes
+    bool currentState = digitalRead(RESET_WIFI_BUTTON);
+    
+    // Détection front descendant (appui)
+    if (lastState == HIGH && currentState == LOW) {
+      pressCount++;
+      lastPressTime = millis();
+      Serial.printf("✓ Press %d/3 detected\n", pressCount);
+      
+      if (pressCount >= 3) {
+        Serial.println("\n🔥 Triple press detected!");
+        return true;
+      }
+      
+      delay(50);  // Anti-rebond
+    }
+    
+    lastState = currentState;
+    delay(10);
+  }
+  
+  if (pressCount > 0) {
+    Serial.printf("Only %d press(es) detected. Reset cancelled.\n", pressCount);
+  }
+  Serial.println("No reset requested. Continuing...\n");
+  return false;
+}
+
 
 // ===== SETUP =====
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n\n=== ESP32 Generic IO Controller ===");
   Serial.println("Version 1.0");
+  Serial.println("Chip ID: " + String((uint32_t)ESP.getEfuseMac(), HEX));
+  Serial.println("SDK Version: " + String(ESP.getSdkVersion()));
+
+  blinkStatusLED(3, 200);
 
   // Load configuration from flash
   preferences.begin("generic-io", false);
   loadConfig();
   loadIOs();
+  Serial.println("Configuration and I/O settings loaded.");
+  blinkStatusLED(2, 100);
+  // Apply I/O pin configurations
+  applyIOPinModes();
+  Serial.println("I/O pin configurations applied.");
+  blinkStatusLED(2, 100);
 
-  // Setup WiFi
-  wifiManager.setConfigPortalTimeout(180);
-  wifiManager.setConnectTimeout(30);
-  if (!wifiManager.autoConnect("ESP32-IO-Setup")) {
-    Serial.println("Failed to connect to WiFi, restarting...");
+  // ===== CONFIGURATION WiFi EN PREMIER =====
+  // Configuration WiFiManager (AVANT les paramètres WiFi)
+  wifiManager.setConfigPortalTimeout(180);  // 3 minutes pour configurer
+  wifiManager.setConnectTimeout(30);        // 30 secondes pour se connecter
+  wifiManager.setConnectRetries(3);         // 3 tentatives de connexion
+  wifiManager.setDebugOutput(true);         // Activer le debug
+  
+  // Vérifier triple appui pour reset WiFi
+  if (checkTriplePress()) {
+    Serial.println("\n⚠⚠⚠ RESETTING WiFi credentials ⚠⚠⚠");
+    wifiManager.resetSettings();
+    delay(1000);
+    Serial.println("Credentials erased. Restarting...");
+    delay(2000);
+    ESP.restart();
+  }
+  
+  // Tentative de connexion WiFi
+  Serial.println("\n⏱ Starting WiFi configuration...");
+  Serial.println("If no saved credentials, access point will start:");
+  Serial.println("SSID: ESP32-Roller-Setup");
+  Serial.println("No password required");
+  Serial.println("Connect and configure WiFi at: http://192.168.4.1\n");
+  
+  // Configuration WiFi pour compatibilité Freebox (juste avant autoConnect)
+ // WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Réduire la puissance pour éviter les timeouts
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  
+  // Configure une IP statique si le DHCP est désactivé sur le routeur/switch
+  // ADAPTE ces valeurs : localIP doit être unique dans le réseau
+  IPAddress localIP(192, 168, 1, 80);   // <-- choisir une IP libre
+  IPAddress gateway(192, 168, 1, 1);   // <-- gateway fournie
+  IPAddress subnet(255, 255, 255, 0);
+  IPAddress dns1(8, 8, 8, 8);
+  if (WiFi.config(localIP, gateway, subnet, dns1) == false) {
+    Serial.println("⚠️ WiFi.config échoué");
+  } else {
+    Serial.print("✓ Static IP configured: ");
+    Serial.println(localIP);
+  }
+  
+  digitalWrite(STATUS_LED, HIGH);
+  
+  
+  if (!wifiManager.autoConnect("ESP32-WifiMQTTRelay-Setup")) {
+    Serial.println("\n✗✗✗ WiFiManager failed to connect ✗✗✗");
+    Serial.println("Restarting in 5 seconds...");
+    digitalWrite(STATUS_LED, LOW);
     delay(5000);
     ESP.restart();
   }
-  Serial.println("WiFi connected.");
+  
+  // Connexion réussie
+  Serial.println("\n✓✓✓ WiFi CONNECTED ✓✓✓");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+  Serial.print("Gateway: ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("RSSI: ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
+  digitalWrite(STATUS_LED, LOW);
+  
+  // Arrêter le serveur de configuration WiFiManager pour libérer le port 80
+  wifiManager.stopConfigPortal();
+  delay(500);  // Attendre la libération du port
 
-  // Apply I/O pin configurations
-  applyIOPinModes();
+   // Démarrage du serveur
+  server.begin();
+  Serial.println("✓ Web server started");
+  Serial.println("\n========================================");
+  Serial.println("Access the web interface at:");
+  Serial.print("http://");
+  Serial.println(WiFi.localIP());
+  Serial.println("========================================\n");
+  
+
 
   // Initialize LittleFS
   if(!LittleFS.begin(true)){
@@ -93,6 +213,9 @@ void setup() {
   Serial.println("Web server started.");
   Serial.println("========================================");
 }
+
+
+  
 
 // ===== LOOP =====
 void loop() {
@@ -304,4 +427,13 @@ void publishMQTT(const char* sub_topic, const char* payload) {
         snprintf(fullTopic, sizeof(fullTopic), "%s/%s", config.mqttTopic, sub_topic);
         mqttClient.publish(fullTopic, payload);
     }
+}
+
+void blinkStatusLED(int times, int delayMs) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(STATUS_LED, HIGH);
+    delay(delayMs);
+    digitalWrite(STATUS_LED, LOW);
+    delay(delayMs);
+  }
 }
