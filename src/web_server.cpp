@@ -22,7 +22,8 @@ void setupWebServer() {
   // API - Statut système
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
     JsonDocument doc;
-    doc["mqtt"] = mqttClient.connected();
+    // If mqtt subsystem is disabled, report false; otherwise report actual connected state
+    doc["mqtt"] = (mqttEnabled ? mqttClient.connected() : false);
     doc["wifi"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = WiFi.localIP().toString();
     
@@ -59,10 +60,12 @@ void setupWebServer() {
             ioPins[i].state = state;
             found = true;
             
-            // Publish to MQTT
-            char topic[128];
-            snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
-            publishMQTT(topic, state ? "1" : "0");
+            // Publish to MQTT only if subsystem enabled
+            if (mqttEnabled) {
+              char topic[128];
+              snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
+              publishMQTT(topic, state ? "1" : "0");
+            }
             
             request->send(200, "application/json", "{\"message\":\"IO mis à jour\"}");
           } else {
@@ -181,6 +184,24 @@ void setupWebServer() {
       request->send(200, "application/json", "{\"message\":\"Configuration enregistrée\"}");
     }
   );
+  
+  // API - Activer MQTT (ne lance la connexion que lorsque activé)
+  server.on("/api/mqtt/enable", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!mqttEnabled) {
+      mqttEnabled = true;
+      setupMQTT();
+    }
+    request->send(200, "application/json", "{\"message\":\"MQTT enabled\"}");
+  });
+
+  // API - Désactiver MQTT (déconnecte et stoppe les tentatives)
+  server.on("/api/mqtt/disable", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (mqttEnabled) {
+      mqttEnabled = false;
+      if (mqttClient.connected()) mqttClient.disconnect();
+    }
+    request->send(200, "application/json", "{\"message\":\"MQTT disabled\"}");
+  });
   
   // ElegantOTA pour les mises à jour
   ElegantOTA.begin(&server);

@@ -113,3 +113,21 @@ mosquitto_pub -h localhost -t "esp32/io/control/relay1/set" -m "0"
 - Vérifiez que l'ESP32 est connecté au broker (Serial Monitor)
 - Vérifiez que les topics correspondent
 - Vérifiez que les relais sont configurés dans l'ESP32
+
+### Accès réseau à l'ESP32 (ping / HTTP inaccessible depuis le PC)
+
+Si l'ESP32 a une IP fixe sur le LAN mais que votre PC ne peut pas le pinguer ni accéder au serveur web, il est possible que le trafic vers ce réseau ne passe pas directement par votre interface Ethernet (ex. VPN actif, route par défaut différente, ou VLAN/switch isolant). Une solution de contournement rapide (temporaire) est d'ajouter une route spécifique sur votre PC vers l'IP de l'ESP32.
+
+Exemple (remplacez `enp1s0` par votre interface Ethernet si nécessaire) :
+
+```bash
+sudo ip route add 192.168.1.80/32 dev enp1s0
+```
+
+Explications et points importants :
+- Cette commande force le PC à envoyer les paquets destinés à `192.168.1.80` via l'interface `enp1s0` (couche L2 locale) au lieu de les router via une autre interface (VPN, etc.).
+- La route ajoutée est temporaire : elle disparaît au redémarrage. Pour la rendre persistante, utilisez la configuration de votre gestionnaire réseau (NetworkManager, /etc/network/interfaces, ou scripts système selon votre distribution).
+- Alternative : déconnecter le VPN ou corriger la table de routage/VLAN sur le switch/routeur pour que le réseau 192.168.1.0/24 soit considéré comme local.
+- Si après l'ajout de la route vous voyez encore des problèmes (pas d'ARP reply), vérifiez la configuration VLAN du switch et la possibilité d'isolation AP (guest network) côté routeur.
+
+Si tu veux, ajoute ici la sortie de `ip route show`, `ip addr`, ou du moniteur série de l'ESP (IP Address / Gateway) et je t'aide à rendre la route persistante ou à corriger la configuration réseau.

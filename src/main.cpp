@@ -11,11 +11,11 @@
 #include <LittleFS.h>
 
 #include "config.h"
+#include "mqtt.h"
 
 // ===== GLOBAL OBJECTS =====
 AsyncWebServer server(80);
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+// WiFiClient and mqttClient are now defined in src/mqtt.cpp
 Preferences preferences;
 WiFiManager wifiManager;
 WiFiUDP ntpUDP;
@@ -40,9 +40,7 @@ void saveIOs();
 void applyIOPinModes();
 void handleIOs();
 void setupWebServer();
-void setupMQTT();
-void reconnectMQTT();
-void publishMQTT(const char* topic, const char* payload);
+// MQTT functions were moved to src/mqtt.cpp and declared in mqtt.h
 void setupNTP();
 void blinkStatusLED(int times, int delayMs);
 
@@ -187,47 +185,48 @@ void setup() {
   Serial.print("http://");
   Serial.println(WiFi.localIP());
   Serial.println("========================================\n");
-  
 
-
-  // Initialize LittleFS
-  if(!LittleFS.begin(true)){
-    Serial.println("An Error has occurred while mounting LittleFS");
-    return;
-  }
-  Serial.println("LittleFS mounted successfully.");
-
-  // Setup NTP
-  setupNTP();
+  // Arrêter le serveur de configuration WiFiManager pour libérer le port 80
+  wifiManager.stopConfigPortal();
+  delay(500);  // Attendre la libération du port
+  Serial.println("✓ Config portal stopped to free port 80");
 
   // Setup Web Server
   setupWebServer();
 
-  // Setup MQTT
-  setupMQTT();
+  // Initialize LittleFS
+  //if(!LittleFS.begin(true)){
+  //  Serial.println("An Error has occurred while mounting LittleFS");
+  //  return;
+  //}
+  //Serial.println("LittleFS mounted successfully.");
 
-  // Start ElegantOTA
-  ElegantOTA.begin(&server);
+  // Setup NTP
+  //setupNTP();
+
+  // Setup MQTT
+  //setupMQTT();
 
   server.begin();
-  Serial.println("Web server started.");
+  Serial.println("Web server started and configured.");
   Serial.println("========================================");
 }
 
 
-  
-
 // ===== LOOP =====
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) {
-      long now = millis();
-      if (now - lastMqttReconnect > 5000) {
-        lastMqttReconnect = now;
-        reconnectMQTT();
+    // Only run MQTT processing if the subsystem is explicitly enabled
+    if (mqttEnabled) {
+      if (!mqttClient.connected()) {
+        long now = millis();
+        if (now - lastMqttReconnect > 5000) {
+          lastMqttReconnect = now;
+          reconnectMQTT();
+        }
       }
+      mqttClient.loop();
     }
-    mqttClient.loop();
   }
 
   timeClient.update();
@@ -343,91 +342,9 @@ void handleIOs() {
 }
 
 // ===== MQTT FUNCTIONS =====
-void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-    Serial.printf("MQTT message arrived [%s] ", topic);
-    
-    // Convert payload to string
-    char message[length + 1];
-    memcpy(message, payload, length);
-    message[length] = '\0';
-    Serial.println(message);
-
-    // Topic structure is expected to be: <base_topic>/control/<pin_name>/set
-    String topicStr = String(topic);
-    String baseTopic = String(config.mqttTopic);
-
-    if (!topicStr.startsWith(baseTopic) || !topicStr.endsWith("/set")) {
-        return; // Not a command for us
-    }
-
-    // Extract pin name
-    String pinName = topicStr.substring(baseTopic.length() + 9, topicStr.length() - 4);
-
-    // Find the IO pin by name
-    for (int i = 0; i < ioPinCount; i++) {
-        if (String(ioPins[i].name) == pinName) {
-            if (ioPins[i].mode == 2) { // OUTPUT
-                bool newState = (strcmp(message, "1") == 0 || strcmp(message, "ON") == 0 || strcmp(message, "true") == 0);
-                
-                digitalWrite(ioPins[i].pin, newState);
-                ioPins[i].state = newState;
-
-                Serial.printf("Output '%s' (pin %d) set to %s\n", ioPins[i].name, ioPins[i].pin, newState ? "HIGH" : "LOW");
-
-                // Publish the new state to the status topic
-                char statusTopic[128];
-                snprintf(statusTopic, sizeof(statusTopic), "status/%s", ioPins[i].name);
-                publishMQTT(statusTopic, newState ? "1" : "0");
-
-            } else {
-                Serial.printf("Received command for non-output pin '%s'\n", pinName.c_str());
-            }
-            return;
-        }
-    }
-
-    Serial.printf("Received command for unknown pin '%s'\n", pinName.c_str());
-}
-
-void setupMQTT() {
-  mqttClient.setServer(config.mqttServer, config.mqttPort);
-  mqttClient.setCallback(mqtt_callback);
-  Serial.println("MQTT setup.");
-}
-
-void reconnectMQTT() {
-  Serial.print("Attempting MQTT connection...");
-  String clientId = "ESP32-IO-Controller-";
-  clientId += String(random(0xffff), HEX);
-  if (mqttClient.connect(clientId.c_str(), config.mqttUser, config.mqttPassword)) {
-    Serial.println("connected");
-    
-    // Subscribe to control topics
-    String topic = String(config.mqttTopic) + "/control/#";
-    mqttClient.subscribe(topic.c_str());
-    Serial.printf("Subscribed to %s\n", topic.c_str());
-
-    // Publish current state of all pins
-    for (int i = 0; i < ioPinCount; i++) {
-        char statusTopic[128];
-        snprintf(statusTopic, sizeof(statusTopic), "status/%s", ioPins[i].name);
-        publishMQTT(statusTopic, ioPins[i].state ? "1" : "0");
-    }
-
-  } else {
-    Serial.print("failed, rc=");
-    Serial.print(mqttClient.state());
-    Serial.println(" try again in 5 seconds");
-  }
-}
-
-void publishMQTT(const char* sub_topic, const char* payload) {
-    if (mqttClient.connected()) {
-        char fullTopic[128];
-        snprintf(fullTopic, sizeof(fullTopic), "%s/%s", config.mqttTopic, sub_topic);
-        mqttClient.publish(fullTopic, payload);
-    }
-}
+// NOTE: MQTT implementation moved to src/mqtt.cpp
+// The original implementation has been removed from this file to avoid
+// duplicate symbols. See src/mqtt.cpp and include "mqtt.h" for the API.
 
 void blinkStatusLED(int times, int delayMs) {
   for (int i = 0; i < times; i++) {
