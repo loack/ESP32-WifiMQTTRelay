@@ -205,7 +205,7 @@ void setup() {
   //setupNTP();
 
   // Setup MQTT
-  //setupMQTT();
+  setupMQTT();
 
   server.begin();
   Serial.println("Web server started and configured.");
@@ -333,7 +333,7 @@ void handleIOs() {
             
             char topic[128];
             snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
-            publishMQTT(topic, currentState ? "1" : "0");
+            if (mqttEnabled) publishMQTT(topic, currentState ? "1" : "0");
           }
         }
       }

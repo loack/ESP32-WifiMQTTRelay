@@ -15,412 +15,375 @@ const char index_html[] PROGMEM = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contrôle Volet Roulant</title>
+    <title>ESP32 MQTT Relay</title>
     <style>
+        :root {
+            --primary-color: #4a69bd;
+            --secondary-color: #6a89cc;
+            --light-gray: #f5f6fa;
+            --dark-gray: #576574;
+            --success-color: #2ecc71;
+            --error-color: #e74c3c;
+            --off-color: #c8d6e5;
+            --on-color: #feca57;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
-            font-family: Arial, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--light-gray);
+            color: var(--dark-gray);
             padding: 20px;
-            min-height: 100vh;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1000px;
             margin: 0 auto;
             background: white;
             border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
             overflow: hidden;
         }
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--primary-color);
             color: white;
-            padding: 30px;
+            padding: 25px;
             text-align: center;
         }
-        .header h1 { font-size: 2em; margin-bottom: 10px; }
+        .header h1 { font-size: 1.8em; }
         .tabs {
             display: flex;
-            background: #f5f5f5;
-            border-bottom: 2px solid #ddd;
+            background: #fff;
+            border-bottom: 1px solid #eee;
         }
         .tab {
             flex: 1;
             padding: 15px;
             text-align: center;
             cursor: pointer;
-            background: #f5f5f5;
+            background: #fff;
             border: none;
             font-size: 16px;
             transition: all 0.3s;
+            color: var(--dark-gray);
+            border-bottom: 3px solid transparent;
         }
-        .tab:hover { background: #e0e0e0; }
+        .tab:hover { background: var(--light-gray); }
         .tab.active {
-            background: white;
-            border-bottom: 3px solid #667eea;
+            color: var(--primary-color);
+            border-bottom: 3px solid var(--primary-color);
             font-weight: bold;
         }
-        .content {
-            padding: 30px;
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
-        .control-panel {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .btn {
-            padding: 20px;
-            font-size: 18px;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
-            color: white;
-            font-weight: bold;
-            text-transform: uppercase;
-        }
-        .btn-open {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        }
-        .btn-close {
-            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
-        }
-        .btn-stop {
-            background: linear-gradient(135deg, #757F9A 0%, #D7DDE8 100%);
-        }
-        .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #333;
-        }
-        .form-group input, .form-group select {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
-        }
-        .form-group input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background: #667eea;
-            color: white;
-            font-weight: bold;
-        }
-        tr:hover {
-            background: #f5f5f5;
-        }
-        .badge {
-            padding: 5px 10px;
-            border-radius: 15px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        .badge-success {
-            background: #38ef7d;
-            color: white;
-        }
-        .badge-danger {
-            background: #f45c43;
-            color: white;
-        }
-        .status-box {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            border-left: 5px solid #667eea;
-        }
-        .status-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            border-bottom: 1px solid #ddd;
-        }
-        .status-item:last-child {
-            border-bottom: none;
-        }
-        .btn-small {
-            padding: 8px 15px;
-            font-size: 14px;
-            border-radius: 5px;
-            border: none;
-            cursor: pointer;
-            margin: 2px;
-        }
-        .btn-delete {
-            background: #f45c43;
-            color: white;
-        }
-        .btn-add {
-            background: #38ef7d;
-            color: white;
-        }
+        .content { padding: 30px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        h2 { margin-bottom: 20px; color: var(--primary-color); border-bottom: 2px solid var(--light-gray); padding-bottom: 10px; }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        
+        .card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        
+        .status-item, .io-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee; }
+        .status-item:last-child, .io-item:last-child { border-bottom: none; }
+        .status-item span:first-child, .io-item span:first-child { font-weight: bold; }
+        
+        .badge { padding: 5px 12px; border-radius: 15px; font-size: 13px; font-weight: bold; color: white; }
+        .badge-success { background: var(--success-color); }
+        .badge-danger { background: var(--error-color); }
+
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; font-weight: bold; }
+        .form-group input, .form-group select { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; }
+        
+        .btn { padding: 12px 20px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; transition: all 0.3s; color: white; font-weight: bold; }
+        .btn-primary { background-color: var(--primary-color); }
+        .btn-primary:hover { background-color: var(--secondary-color); }
+        .btn-danger { background-color: var(--error-color); }
+        .btn-small { padding: 8px 12px; font-size: 14px; }
+
+        .toggle-switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--off-color); transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--on-color); }
+        input:checked + .slider:before { transform: translateX(26px); }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: var(--light-gray); font-weight: bold; }
+        td .btn-small { float: right; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🏠 Contrôle Volet Roulant ESP32</h1>
-            <p>Gestion intelligente avec Wiegand, RFID et Empreinte</p>
+            <h1>ESP32 MQTT Relay</h1>
+            <p>Contrôleur d'I/O avec interface Web et MQTT</p>
         </div>
         
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('control')">Contrôle</button>
-            <button class="tab" onclick="switchTab('codes')">Codes d'Accès</button>
-            <button class="tab" onclick="switchTab('logs')">Historique</button>
-            <button class="tab" onclick="switchTab('config')">Configuration</button>
-            <button class="tab" onclick="switchTab('update')">Mise à Jour</button>
+            <button class="tab active" onclick="switchTab(event, 'status')">Statut & Contrôle</button>
+            <button class="tab" onclick="switchTab(event, 'ios')">Configuration I/O</button>
+            <button class="tab" onclick="switchTab(event, 'config')">Configuration MQTT</button>
+            <button class="tab" onclick="switchTab(event, 'update')">Mise à Jour</button>
         </div>
         
         <div class="content">
-            <!-- TAB CONTROLE -->
-            <div id="control" class="tab-content active">
-                <h2>Contrôle Manuel</h2>
-                <div class="control-panel">
-                    <button class="btn btn-open" onclick="controlRelay('open')">⬆️ Ouvrir</button>
-                    <button class="btn btn-close" onclick="controlRelay('close')">⬇️ Fermer</button>
-                    <button class="btn btn-stop" onclick="controlRelay('stop')">⏹️ Stop</button>
+            <!-- TAB STATUT & CONTROLE -->
+            <div id="status" class="tab-content active">
+                <h2>Statut du Système</h2>
+                <div class="grid">
+                    <div class="card">
+                        <div class="status-item">
+                            <span>WiFi</span>
+                            <span id="wifi-status">...</span>
+                        </div>
+                        <div class="status-item">
+                            <span>Adresse IP</span>
+                            <span id="ip-address">...</span>
+                        </div>
+                        <div class="status-item">
+                            <span>MQTT</span>
+                            <span id="mqtt-status">...</span>
+                        </div>
+                    </div>
                 </div>
-                
-                <div class="status-box">
-                    <h3>État du Système</h3>
-                    <div class="status-item">
-                        <span>WiFi:</span>
-                        <span id="wifi-status">Connecté</span>
-                    </div>
-                    <div class="status-item">
-                        <span>MQTT:</span>
-                        <span id="mqtt-status">...</span>
-                    </div>
-                    <div class="status-item">
-                        <span>Barrière Photo:</span>
-                        <span id="barrier-status">...</span>
-                    </div>
-                    <div class="status-item">
-                        <span>Relais:</span>
-                        <span id="relay-status">Inactif</span>
-                    </div>
+
+                <h2 style="margin-top: 30px;">Contrôle des Sorties</h2>
+                <div class="grid" id="outputs-control">
+                    <p>Aucune sortie configurée.</p>
+                </div>
+
+                <h2 style="margin-top: 30px;">État des Entrées</h2>
+                <div class="grid" id="inputs-status">
+                     <p>Aucune entrée configurée.</p>
                 </div>
             </div>
             
-            <!-- TAB CODES -->
-            <div id="codes" class="tab-content">
-                <h2>Codes d'Accès</h2>
-                <button class="btn btn-add" onclick="showAddCodeForm()">+ Ajouter un Code</button>
-                
-                <div id="add-code-form" style="display:none; margin-top: 20px; padding: 20px; background: #f8f9fa; border-radius: 10px;">
-                    <h3>Nouveau Code</h3>
+            <!-- TAB CONFIG I/O -->
+            <div id="ios" class="tab-content">
+                <h2>Configuration des I/O</h2>
+                <div class="card">
+                    <h3>Ajouter/Modifier un I/O</h3>
                     <div class="form-group">
-                        <label>Code (numérique):</label>
-                        <input type="number" id="new-code" placeholder="Ex: 1234">
+                        <label for="io-name">Nom</label>
+                        <input type="text" id="io-name" placeholder="Ex: Lumière Salon">
                     </div>
                     <div class="form-group">
-                        <label>Type:</label>
-                        <select id="new-type">
-                            <option value="0">Wiegand/Clavier</option>
-                            <option value="1">RFID</option>
-                            <option value="2">Empreinte</option>
+                        <label for="io-pin">Broche (Pin)</label>
+                        <input type="number" id="io-pin" placeholder="Ex: 23">
+                    </div>
+                    <div class="form-group">
+                        <label for="io-mode">Mode</label>
+                        <select id="io-mode">
+                            <option value="1">Entrée (INPUT)</option>
+                            <option value="2">Sortie (OUTPUT)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Nom:</label>
-                        <input type="text" id="new-name" placeholder="Ex: Utilisateur 1">
+                        <label for="io-default-state">État par défaut (pour sorties)</label>
+                        <select id="io-default-state">
+                            <option value="0">BAS (OFF)</option>
+                            <option value="1">HAUT (ON)</option>
+                        </select>
                     </div>
-                    <button class="btn-small btn-add" onclick="addCode()">Enregistrer</button>
-                    <button class="btn-small" onclick="hideAddCodeForm()">Annuler</button>
+                    <button class="btn btn-primary" onclick="addIO()">Ajouter I/O</button>
                 </div>
-                
-                <table id="codes-table">
+
+                <h3 style="margin-top: 30px;">I/O Actuels</h3>
+                <table id="ios-table">
                     <thead>
                         <tr>
-                            <th>Code</th>
-                            <th>Type</th>
                             <th>Nom</th>
-                            <th>Statut</th>
-                            <th>Actions</th>
+                            <th>Pin</th>
+                            <th>Mode</th>
+                            <th>Défaut</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
-                    <tbody id="codes-tbody">
-                        <tr><td colspan="5">Chargement...</td></tr>
+                    <tbody id="ios-tbody">
+                        <!-- Rempli par JS -->
                     </tbody>
                 </table>
+                <button class="btn btn-primary" style="margin-top: 20px;" onclick="saveIOs()">💾 Enregistrer la Configuration I/O</button>
             </div>
             
-            <!-- TAB LOGS -->
-            <div id="logs" class="tab-content">
-                <h2>Historique des Accès</h2>
-                <button class="btn-small btn-add" onclick="loadLogs()">🔄 Actualiser</button>
-                <table id="logs-table">
-                    <thead>
-                        <tr>
-                            <th>Horodatage</th>
-                            <th>Code</th>
-                            <th>Type</th>
-                            <th>Résultat</th>
-                        </tr>
-                    </thead>
-                    <tbody id="logs-tbody">
-                        <tr><td colspan="4">Chargement...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- TAB CONFIG -->
+            <!-- TAB CONFIG MQTT -->
             <div id="config" class="tab-content">
-                <h2>Configuration</h2>
-                
-                <h3>Relais</h3>
-                <div class="form-group">
-                    <label>Durée d'activation (ms):</label>
-                    <input type="number" id="relay-duration" value="5000">
+                <h2>Configuration MQTT</h2>
+                <div class="card">
+                    <div class="form-group">
+                        <label>Serveur MQTT</label>
+                        <input type="text" id="mqtt-server">
+                    </div>
+                    <div class="form-group">
+                        <label>Port</label>
+                        <input type="number" id="mqtt-port" value="1883">
+                    </div>
+                    <div class="form-group">
+                        <label>Utilisateur</label>
+                        <input type="text" id="mqtt-user">
+                    </div>
+                    <div class="form-group">
+                        <label>Mot de passe</label>
+                        <input type="password" id="mqtt-password">
+                    </div>
+                    <div class="form-group">
+                        <label>Topic de base</label>
+                        <input type="text" id="mqtt-topic">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveConfig()">💾 Enregistrer la Configuration</button>
                 </div>
-                <div class="form-group">
-                    <label>Barrière photoélectrique:</label>
-                    <select id="photo-enabled">
-                        <option value="1">Activée</option>
-                        <option value="0">Désactivée</option>
-                    </select>
+                <h3 style="margin-top: 30px;">Contrôle du service MQTT</h3>
+                 <div class="card">
+                    <button class="btn btn-primary" onclick="enableMQTT()">Activer MQTT</button>
+                    <button class="btn btn-danger" onclick="disableMQTT()">Désactiver MQTT</button>
                 </div>
-                
-                <h3 style="margin-top: 30px;">MQTT</h3>
-                <div class="form-group">
-                    <label>Serveur:</label>
-                    <input type="text" id="mqtt-server" placeholder="mqtt.example.com">
-                </div>
-                <div class="form-group">
-                    <label>Port:</label>
-                    <input type="number" id="mqtt-port" value="1883">
-                </div>
-                <div class="form-group">
-                    <label>Utilisateur:</label>
-                    <input type="text" id="mqtt-user">
-                </div>
-                <div class="form-group">
-                    <label>Mot de passe:</label>
-                    <input type="password" id="mqtt-password">
-                </div>
-                <div class="form-group">
-                    <label>Topic:</label>
-                    <input type="text" id="mqtt-topic" value="roller">
-                </div>
-                
-                <h3 style="margin-top: 30px;">Sécurité</h3>
-                <div class="form-group">
-                    <label>Mot de passe admin:</label>
-                    <input type="password" id="admin-password">
-                </div>
-                
-                <button class="btn btn-add" onclick="saveConfig()">💾 Enregistrer Configuration</button>
             </div>
             
             <!-- TAB UPDATE -->
             <div id="update" class="tab-content">
-                <h2>Mise à Jour OTA</h2>
-                <p>Accédez à la page de mise à jour:</p>
-                <a href="/update" target="_blank">
-                    <button class="btn btn-open">📡 Ouvrir Interface OTA</button>
-                </a>
+                <h2>Mise à Jour Firmware (OTA)</h2>
+                <div class="card">
+                    <p>Utilisez cette page pour téléverser un nouveau firmware (.bin) sur l'appareil.</p>
+                    <a href="/update" target="_blank">
+                        <button class="btn btn-primary" style="margin-top: 20px;">📡 Ouvrir l'Interface de Mise à Jour</button>
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        function switchTab(tabName) {
-            const tabs = document.querySelectorAll('.tab');
-            const contents = document.querySelectorAll('.tab-content');
-            
-            tabs.forEach(tab => tab.classList.remove('active'));
-            contents.forEach(content => content.classList.remove('active'));
-            
-            event.target.classList.add('active');
+        let ioPins = [];
+
+        function switchTab(evt, tabName) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.getElementById(tabName).classList.add('active');
+            evt.currentTarget.classList.add('active');
             
-            if (tabName === 'codes') loadCodes();
-            if (tabName === 'logs') loadLogs();
+            if (tabName === 'status') loadStatus();
+            if (tabName === 'ios') loadIOs();
             if (tabName === 'config') loadConfig();
         }
         
-        function controlRelay(action) {
-            fetch('/api/relay', {
+        function loadStatus() {
+            fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('wifi-status').innerHTML = data.wifi ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
+                document.getElementById('ip-address').textContent = data.ip;
+                document.getElementById('mqtt-status').innerHTML = data.mqtt ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
+                
+                const outputsDiv = document.getElementById('outputs-control');
+                const inputsDiv = document.getElementById('inputs-status');
+                outputsDiv.innerHTML = '';
+                inputsDiv.innerHTML = '';
+
+                const outputs = data.ios.filter(io => io.mode == 2);
+                const inputs = data.ios.filter(io => io.mode == 1);
+
+                if (outputs.length > 0) {
+                    outputs.forEach(io => {
+                        outputsDiv.innerHTML += `
+                            <div class="card io-item">
+                                <span>${io.name} (GPIO ${io.pin})</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" ${io.state ? 'checked' : ''} onchange="setIO('${io.name}', this.checked)">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        `;
+                    });
+                } else {
+                    outputsDiv.innerHTML = '<p>Aucune sortie configurée.</p>';
+                }
+
+                if (inputs.length > 0) {
+                    inputs.forEach(io => {
+                        inputsDiv.innerHTML += `
+                            <div class="card io-item">
+                                <span>${io.name} (GPIO ${io.pin})</span>
+                                <span>${io.state ? 'HAUT' : 'BAS'}</span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    inputsDiv.innerHTML = '<p>Aucune entrée configurée.</p>';
+                }
+            });
+        }
+
+        function setIO(name, state) {
+            fetch('/api/io/set', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: action})
-            })
-            .then(r => r.json())
-            .then(data => {
-                alert(data.message || 'Commande envoyée');
-                document.getElementById('relay-status').textContent = action === 'stop' ? 'Inactif' : action;
+                body: JSON.stringify({ name: name, state: state })
+            }).then(r => r.json()).then(data => {
+                console.log(data.message);
+                setTimeout(loadStatus, 200); // Refresh status after a short delay
             });
         }
         
-        function loadCodes() {
-            fetch('/api/codes')
+        function loadIOs() {
+            fetch('/api/ios')
             .then(r => r.json())
             .then(data => {
-                const tbody = document.getElementById('codes-tbody');
-                tbody.innerHTML = '';
-                data.codes.forEach((code, idx) => {
-                    const types = ['Wiegand', 'RFID', 'Empreinte'];
-                    tbody.innerHTML += `
-                        <tr>
-                            <td>${code.code}</td>
-                            <td>${types[code.type]}</td>
-                            <td>${code.name}</td>
-                            <td><span class="badge badge-success">${code.active ? 'Actif' : 'Inactif'}</span></td>
-                            <td><button class="btn-small btn-delete" onclick="deleteCode(${idx})">Supprimer</button></td>
-                        </tr>
-                    `;
-                });
+                ioPins = data.ios;
+                renderIOTable();
             });
         }
-        
-        function loadLogs() {
-            fetch('/api/logs')
-            .then(r => r.json())
-            .then(data => {
-                const tbody = document.getElementById('logs-tbody');
-                tbody.innerHTML = '';
-                data.logs.forEach(log => {
-                    const types = ['Wiegand', 'RFID', 'Empreinte'];
-                    const badge = log.granted ? 'badge-success' : 'badge-danger';
-                    const result = log.granted ? 'Accordé' : 'Refusé';
-                    tbody.innerHTML += `
-                        <tr>
-                            <td>${new Date(log.timestamp).toLocaleString()}</td>
-                            <td>${log.code}</td>
-                            <td>${types[log.type]}</td>
-                            <td><span class="badge ${badge}">${result}</span></td>
-                        </tr>
-                    `;
-                });
+
+        function renderIOTable() {
+            const tbody = document.getElementById('ios-tbody');
+            tbody.innerHTML = '';
+            ioPins.forEach((io, index) => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${io.name}</td>
+                        <td>${io.pin}</td>
+                        <td>${io.mode == 1 ? 'Entrée' : 'Sortie'}</td>
+                        <td>${io.defaultState ? 'HAUT' : 'BAS'}</td>
+                        <td><button class="btn btn-danger btn-small" onclick="deleteIO(${index})">X</button></td>
+                    </tr>
+                `;
+            });
+        }
+
+        function addIO() {
+            const name = document.getElementById('io-name').value;
+            const pin = parseInt(document.getElementById('io-pin').value);
+            const mode = parseInt(document.getElementById('io-mode').value);
+            const defaultState = document.getElementById('io-default-state').value == "1";
+
+            if (!name || isNaN(pin)) {
+                alert("Le nom et la broche sont requis.");
+                return;
+            }
+
+            ioPins.push({ name, pin, mode, defaultState, state: false });
+            renderIOTable();
+
+            // Clear form
+            document.getElementById('io-name').value = '';
+            document.getElementById('io-pin').value = '';
+        }
+
+        function deleteIO(index) {
+            if (confirm(`Voulez-vous vraiment supprimer l'I/O "${ioPins[index].name}" ?`)) {
+                ioPins.splice(index, 1);
+                renderIOTable();
+            }
+        }
+
+        function saveIOs() {
+            fetch('/api/ios', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ios: ioPins })
+            }).then(r => r.json()).then(data => {
+                alert(data.message || "Erreur lors de la sauvegarde.");
             });
         }
         
@@ -428,8 +391,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             fetch('/api/config')
             .then(r => r.json())
             .then(data => {
-                document.getElementById('relay-duration').value = data.relayDuration;
-                document.getElementById('photo-enabled').value = data.photoEnabled ? '1' : '0';
                 document.getElementById('mqtt-server').value = data.mqttServer;
                 document.getElementById('mqtt-port').value = data.mqttPort;
                 document.getElementById('mqtt-user').value = data.mqttUser;
@@ -439,14 +400,11 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         function saveConfig() {
             const config = {
-                relayDuration: parseInt(document.getElementById('relay-duration').value),
-                photoEnabled: document.getElementById('photo-enabled').value === '1',
                 mqttServer: document.getElementById('mqtt-server').value,
                 mqttPort: parseInt(document.getElementById('mqtt-port').value),
                 mqttUser: document.getElementById('mqtt-user').value,
                 mqttPassword: document.getElementById('mqtt-password').value,
                 mqttTopic: document.getElementById('mqtt-topic').value,
-                adminPassword: document.getElementById('admin-password').value
             };
             
             fetch('/api/config', {
@@ -457,91 +415,28 @@ const char index_html[] PROGMEM = R"rawliteral(
             .then(r => r.json())
             .then(data => alert(data.message || 'Configuration enregistrée'));
         }
-        
-        function showAddCodeForm() {
-            document.getElementById('add-code-form').style.display = 'block';
+
+        function enableMQTT() {
+            fetch('/api/mqtt/enable', { method: 'POST' })
+            .then(r => r.json()).then(data => {
+                alert(data.message);
+                loadStatus();
+            });
         }
-        
-        function hideAddCodeForm() {
-            document.getElementById('add-code-form').style.display = 'none';
-            // Réinitialiser le formulaire
-            document.getElementById('new-code').value = '';
-            document.getElementById('new-type').value = '0';
-            document.getElementById('new-name').value = '';
-        }
-        
-        function addCode() {
-            const codeValue = parseInt(document.getElementById('new-code').value);
-            const nameValue = document.getElementById('new-name').value;
-            
-            // Validation
-            if (!codeValue || isNaN(codeValue)) {
-                alert('Code invalide');
-                return;
-            }
-            
-            if (!nameValue || nameValue.trim() === '') {
-                alert('Nom requis');
-                return;
-            }
-            
-            const code = {
-                code: codeValue,
-                type: parseInt(document.getElementById('new-type').value),
-                name: nameValue.trim(),
-                active: true
-            };
-            
-            fetch('/api/codes', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(code)
-            })
-            .then(r => r.json())
-            .then(data => {
-                alert(data.message || data.error || 'Code ajouté');
-                hideAddCodeForm();
-                loadCodes();
-            })
-            .catch(err => {
-                alert('Erreur lors de l\'ajout: ' + err);
+
+        function disableMQTT() {
+            fetch('/api/mqtt/disable', { method: 'POST' })
+            .then(r => r.json()).then(data => {
+                alert(data.message);
+                loadStatus();
             });
         }
         
-        function deleteCode(index) {
-            if (!confirm('Supprimer ce code?')) return;
-            
-            console.log('Deleting code at index:', index);
-            
-            fetch('/api/codes/delete?index=' + index)
-            .then(response => {
-                console.log('Response status:', response.status);
-                return response.json().then(data => ({status: response.status, body: data}));
-            })
-            .then(result => {
-                console.log('Response:', result);
-                if (result.status === 200) {
-                    alert(result.body.message || 'Code supprimé');
-                    // Attendre un peu avant de recharger pour être sûr que la NVS est sauvegardée
-                    setTimeout(() => loadCodes(), 100);
-                } else {
-                    alert('Erreur: ' + (result.body.error || 'Erreur inconnue'));
-                }
-            })
-            .catch(err => {
-                console.error('Delete error:', err);
-                alert('Erreur lors de la suppression: ' + err);
-            });
-        }
-        
-        // Charger les données au démarrage
-        loadCodes();
-        setInterval(() => {
-            fetch('/api/status').then(r => r.json()).then(data => {
-                document.getElementById('mqtt-status').textContent = data.mqtt ? 'Connecté' : 'Déconnecté';
-                document.getElementById('barrier-status').textContent = data.barrier ? 'OK' : 'Coupée';
-            });
-        }, 2000);
+        // Initial load
+        window.onload = () => {
+            loadStatus();
+            setInterval(loadStatus, 5000); // Refresh status every 5 seconds
+        };
     </script>
 </body>
 </html>

@@ -1,26 +1,26 @@
 #include "web_server.h"
 #include "config.h"
+#include "mqtt.h"
 #include <ElegantOTA.h>
-#include <PubSubClient.h>
 
 extern Config config;
 extern IOPin ioPins[];
 extern int ioPinCount;
-extern PubSubClient mqttClient;
 extern AccessLog accessLogs[];
 
 extern void saveConfig();
 extern void saveIOs();
-extern void publishMQTT(const char* topic, const char* payload);
 
 void setupWebServer() {
   // Page principale
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /");
     request->send(200, "text/html", index_html);
   });
   
   // API - Statut système
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /api/status");
     JsonDocument doc;
     // If mqtt subsystem is disabled, report false; otherwise report actual connected state
     doc["mqtt"] = (mqttEnabled ? mqttClient.connected() : false);
@@ -51,6 +51,8 @@ void setupWebServer() {
       String ioName = doc["name"].as<String>();
       bool state = doc["state"].as<bool>();
       
+      Serial.printf("API: POST /api/io/set - name: %s, state: %d\n", ioName.c_str(), state);
+
       // Find IO by name
       bool found = false;
       for (int i = 0; i < ioPinCount; i++) {
@@ -84,6 +86,7 @@ void setupWebServer() {
   
   // API - Get IOs configuration
   server.on("/api/ios", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /api/ios");
     JsonDocument doc;
     JsonArray ios = doc["ios"].to<JsonArray>();
     
@@ -104,6 +107,7 @@ void setupWebServer() {
   // API - Save IOs configuration
   server.on("/api/ios", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      Serial.println("API: POST /api/ios");
       JsonDocument doc;
       deserializeJson(doc, (const char*)data);
       
@@ -129,6 +133,7 @@ void setupWebServer() {
   
   // API - Récupérer les logs
   server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /api/logs");
     JsonDocument doc;
     JsonArray logs = doc["logs"].to<JsonArray>();
     
@@ -149,6 +154,7 @@ void setupWebServer() {
   
   // API - Récupérer la configuration
   server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /api/config");
     JsonDocument doc;
     doc["mqttServer"] = config.mqttServer;
     doc["mqttPort"] = config.mqttPort;
@@ -163,6 +169,7 @@ void setupWebServer() {
   // API - Enregistrer la configuration
   server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      Serial.println("API: POST /api/config");
       JsonDocument doc;
       deserializeJson(doc, (const char*)data);
     
@@ -187,18 +194,29 @@ void setupWebServer() {
   
   // API - Activer MQTT (ne lance la connexion que lorsque activé)
   server.on("/api/mqtt/enable", HTTP_POST, [](AsyncWebServerRequest *request){
+    Serial.println("API: POST /api/mqtt/enable");
     if (!mqttEnabled) {
       mqttEnabled = true;
+      Serial.println("MQTT enabled. Initializing connection...");
       setupMQTT();
+    } else {
+      Serial.println("MQTT is already enabled.");
     }
     request->send(200, "application/json", "{\"message\":\"MQTT enabled\"}");
   });
 
   // API - Désactiver MQTT (déconnecte et stoppe les tentatives)
   server.on("/api/mqtt/disable", HTTP_POST, [](AsyncWebServerRequest *request){
+    Serial.println("API: POST /api/mqtt/disable");
     if (mqttEnabled) {
       mqttEnabled = false;
-      if (mqttClient.connected()) mqttClient.disconnect();
+      if (mqttClient.connected()) {
+        Serial.println("Disconnecting MQTT client...");
+        mqttClient.disconnect();
+      }
+      Serial.println("MQTT disabled.");
+    } else {
+      Serial.println("MQTT is already disabled.");
     }
     request->send(200, "application/json", "{\"message\":\"MQTT disabled\"}");
   });
