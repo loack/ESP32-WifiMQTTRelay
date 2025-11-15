@@ -44,3 +44,10 @@ libraries by scanning project source files.
 
 More information about PlatformIO Library Dependency Finder
 - https://docs.platformio.org/page/librarymanager/ldf.html
+
+
+
+je voudrais aussi pouvoir définir si les ordres sont exécutés dès leur réception ou à une heure précise. le but étant de pouvoir s'assurer que plusieurs relay s'activent bien même temps.
+
+
+

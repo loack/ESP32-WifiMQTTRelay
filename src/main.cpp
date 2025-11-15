@@ -7,7 +7,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFiUdp.h>
-#include <LittleFS.h>
+#include <SPIFFS.h>
 
 #include "config.h"
 #include "mqtt.h"
@@ -191,18 +191,22 @@ void setup() {
   // Setup Web Server
   setupWebServer();
 
-  // Initialize LittleFS
-  //if(!LittleFS.begin(true)){
-  //  Serial.println("An Error has occurred while mounting LittleFS");
-  //  return;
-  //}
-  //Serial.println("LittleFS mounted successfully.");
+  // Initialize SPIFFS
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
+  Serial.println("SPIFFS mounted successfully.");
 
   // Setup NTP
   setupNTP();
 
   // Setup MQTT
   setupMQTT();
+  if (strlen(config.mqttServer) > 0) {
+    Serial.println("MQTT configuration found, enabling MQTT.");
+    mqttEnabled = true;
+  }
 
   server.begin();
   Serial.println("Web server started and configured.");
@@ -286,6 +290,8 @@ void saveIOs() {
 }
 
 void applyIOPinModes() {
+
+    pinMode(STATUS_LED, OUTPUT); // Définit GPIO 23 comme une sortie
     for (int i = 0; i < ioPinCount; i++) {
         if (ioPins[i].mode == 1) { // INPUT
             pinMode(ioPins[i].pin, INPUT_PULLUP); // Or INPUT, depending on needs

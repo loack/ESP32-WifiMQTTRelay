@@ -2,51 +2,48 @@
 #include "config.h"
 #include "mqtt.h"
 #include <ElegantOTA.h>
-#include <NTPClient.h>
+#include <ArduinoJson.h>
+#include <SPIFFS.h>
+#include <ESPAsyncWebServer.h>
 
+extern AsyncWebServer server;
 extern Config config;
 extern IOPin ioPins[];
 extern int ioPinCount;
-extern AccessLog accessLogs[];
-extern NTPClient timeClient;
+extern bool mqttEnabled;
 
 extern void saveConfig();
 extern void saveIOs();
-extern void setupNTP();
+extern void applyIOPinModes();
 
 void setupWebServer() {
-  // Page principale
+  // Servir le fichier index.html depuis SPIFFS
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("API: GET /");
-    request->send(200, "text/html", index_html);
+    request->send(SPIFFS, "/index.html", "text/html");
   });
   
-  // API - Statut système
+  // API pour le statut système complet
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("API: GET /api/status");
     JsonDocument doc;
-    // If mqtt subsystem is disabled, report false; otherwise report actual connected state
-    doc["mqtt"] = (mqttEnabled ? mqttClient.connected() : false);
     doc["wifi"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = WiFi.localIP().toString();
+    doc["mqtt"] = mqttClient.connected();
     
-    // Get formatted time
     time_t now;
-    struct tm * timeinfo;
     time(&now);
-    timeinfo = localtime(&now);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
     char timeStr[20];
-    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", timeinfo);
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
     doc["time"] = timeStr;
     
-    // Add IOs status
     JsonArray ios = doc["ios"].to<JsonArray>();
     for (int i = 0; i < ioPinCount; i++) {
       JsonObject io = ios.add<JsonObject>();
       io["name"] = ioPins[i].name;
       io["pin"] = ioPins[i].pin;
       io["mode"] = ioPins[i].mode;
-      io["state"] = ioPins[i].state;
+      io["state"] = digitalRead(ioPins[i].pin);
     }
     
     String response;
@@ -54,119 +51,91 @@ void setupWebServer() {
     request->send(200, "application/json", response);
   });
   
-  // API - Contrôle IO (set output state)
+  // API pour contrôler une sortie
   server.on("/api/io/set", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
       JsonDocument doc;
-      deserializeJson(doc, (const char*)data);
+      if (deserializeJson(doc, (const char*)data) != DeserializationError::Ok) {
+        request->send(400, "application/json", "{\"success\":false, \"message\":\"Invalid JSON\"}");
+        return;
+      }
       
-      String ioName = doc["name"].as<String>();
-      bool state = doc["state"].as<bool>();
-      
-      Serial.printf("API: POST /api/io/set - name: %s, state: %d\n", ioName.c_str(), state);
+      const char* ioName = doc["name"];
+      bool state = doc["state"];
 
-      // Find IO by name
-      bool found = false;
       for (int i = 0; i < ioPinCount; i++) {
-        if (String(ioPins[i].name) == ioName) {
+        if (strcmp(ioPins[i].name, ioName) == 0) {
           if (ioPins[i].mode == 2) { // OUTPUT
             digitalWrite(ioPins[i].pin, state);
             ioPins[i].state = state;
-            found = true;
             
-            // Publish to MQTT only if subsystem enabled
-            if (mqttEnabled) {
-              char topic[128];
-              snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
-              publishMQTT(topic, state ? "1" : "0");
-            }
+            char topic[128];
+            snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[i].name);
             
-            request->send(200, "application/json", "{\"message\":\"IO mis à jour\"}");
+            JsonDocument statusDoc;
+            statusDoc["state"] = state ? "ON" : "OFF";
+            statusDoc["timestamp"] = time(nullptr);
+            String payload;
+            serializeJson(statusDoc, payload);
+
+            if (mqttEnabled) publishMQTT(topic, payload.c_str(), true);
+            
+            request->send(200, "application/json", "{\"success\":true, \"message\":\"IO mis à jour\"}");
           } else {
-            request->send(400, "application/json", "{\"error\":\"Cet IO n'est pas une sortie\"}");
+            request->send(400, "application/json", "{\"success\":false, \"message\":\"Cet IO n'est pas une sortie\"}");
             return;
           }
-          break;
+          return;
         }
       }
-      
-      if (!found) {
-        request->send(404, "application/json", "{\"error\":\"IO non trouvé\"}");
-      }
+      request->send(404, "application/json", "{\"success\":false, \"message\":\"IO non trouvé\"}");
     }
   );
-  
-  // API - Get IOs configuration
+
+  // API pour récupérer la config des IOs
   server.on("/api/ios", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("API: GET /api/ios");
     JsonDocument doc;
     JsonArray ios = doc["ios"].to<JsonArray>();
-    
     for (int i = 0; i < ioPinCount; i++) {
       JsonObject io = ios.add<JsonObject>();
       io["name"] = ioPins[i].name;
       io["pin"] = ioPins[i].pin;
       io["mode"] = ioPins[i].mode;
-      io["state"] = ioPins[i].state;
       io["defaultState"] = ioPins[i].defaultState;
     }
-    
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
   });
-  
-  // API - Save IOs configuration
-  server.on("/api/ios", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+
+  // API pour enregistrer la config des IOs
+  server.on("/api/ios", HTTP_POST, 
+    [](AsyncWebServerRequest *request){},
+    NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-      Serial.println("API: POST /api/ios");
-      JsonDocument doc;
-      deserializeJson(doc, (const char*)data);
-      
-      JsonArray ios = doc["ios"].as<JsonArray>();
-      ioPinCount = 0;
-      
-      for (JsonObject io : ios) {
-        if (ioPinCount < MAX_IOS) {
-          ioPins[ioPinCount].pin = io["pin"];
-          strlcpy(ioPins[ioPinCount].name, io["name"], 32);
-          ioPins[ioPinCount].mode = io["mode"];
-          ioPins[ioPinCount].defaultState = io["defaultState"] | false;
-          ioPinCount++;
-        }
-      }
-      
-      saveIOs();
-      
-      request->send(200, "application/json", "{\"message\":\"Configuration IOs enregistrée\"}");
-    }
-  );
-  
-  
-  // API - Récupérer les logs
-  server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("API: GET /api/logs");
     JsonDocument doc;
-    JsonArray logs = doc["logs"].to<JsonArray>();
-    
-    for (int i = 0; i < 100; i++) {
-      if (accessLogs[i].timestamp > 0) {
-        JsonObject log = logs.add<JsonObject>();
-        log["timestamp"] = accessLogs[i].timestamp;
-        log["code"] = accessLogs[i].code;
-        log["granted"] = accessLogs[i].granted;
-        log["type"] = accessLogs[i].type;
-      }
+    if (deserializeJson(doc, (const char*)data) != DeserializationError::Ok) {
+        request->send(400, "application/json", "{\"success\":false, \"message\":\"Invalid JSON\"}");
+        return;
     }
-    
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
+    JsonArray newIOs = doc["ios"];
+    ioPinCount = 0;
+    for (JsonObject ioData : newIOs) {
+        if (ioPinCount < MAX_IOS) {
+            strlcpy(ioPins[ioPinCount].name, ioData["name"], sizeof(ioPins[ioPinCount].name));
+            ioPins[ioPinCount].pin = ioData["pin"];
+            ioPins[ioPinCount].mode = ioData["mode"];
+            ioPins[ioPinCount].defaultState = ioData["defaultState"];
+            ioPinCount++;
+        }
+    }
+    saveIOs();
+    applyIOPinModes();
+    request->send(200, "application/json", "{\"success\":true, \"message\":\"Configuration I/O enregistrée.\"}");
   });
   
-  // API - Récupérer la configuration
+  // API pour récupérer la configuration système
   server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("API: GET /api/config");
     JsonDocument doc;
     doc["mqttServer"] = config.mqttServer;
     doc["mqttPort"] = config.mqttPort;
@@ -178,63 +147,49 @@ void setupWebServer() {
     request->send(200, "application/json", response);
   });
   
-  // API - Enregistrer la configuration
-  server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+  // API pour enregistrer la configuration système
+  server.on("/api/config", HTTP_POST, 
+    [](AsyncWebServerRequest *request){},
+    NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-      Serial.println("API: POST /api/config");
       JsonDocument doc;
-      deserializeJson(doc, (const char*)data);
+      if (deserializeJson(doc, (const char*)data) != DeserializationError::Ok) {
+        request->send(400, "application/json", "{\"success\":false, \"message\":\"Invalid JSON\"}");
+        return;
+      }
     
-      config.mqttPort = doc["mqttPort"] | 1883;
-      
-      if (doc["mqttServer"].is<const char*>()) 
-        strlcpy(config.mqttServer, doc["mqttServer"], 64);
-      if (doc["mqttUser"].is<const char*>()) 
-        strlcpy(config.mqttUser, doc["mqttUser"], 32);
-      if (doc["mqttPassword"].is<const char*>()) 
-        strlcpy(config.mqttPassword, doc["mqttPassword"], 32);
-      if (doc["mqttTopic"].is<const char*>()) 
-        strlcpy(config.mqttTopic, doc["mqttTopic"], 64);
-      if (doc["adminPassword"].is<const char*>()) 
-        strlcpy(config.adminPassword, doc["adminPassword"], 32);
+      if (doc["mqttServer"]) strlcpy(config.mqttServer, doc["mqttServer"], sizeof(config.mqttServer));
+      if (doc["mqttPort"]) config.mqttPort = doc["mqttPort"];
+      if (doc["mqttUser"]) strlcpy(config.mqttUser, doc["mqttUser"], sizeof(config.mqttUser));
+      if (doc["mqttPassword"] && !doc["mqttPassword"].isNull() && strlen(doc["mqttPassword"]) > 0) {
+        strlcpy(config.mqttPassword, doc["mqttPassword"], sizeof(config.mqttPassword));
+      }
+      if (doc["mqttTopic"]) strlcpy(config.mqttTopic, doc["mqttTopic"], sizeof(config.mqttTopic));
       
       saveConfig();
       
-      request->send(200, "application/json", "{\"message\":\"Configuration enregistrée\"}");
+      request->send(200, "application/json", "{\"success\":true, \"message\":\"Configuration enregistrée, redémarrage...\"}");
+      delay(1000);
+      ESP.restart();
     }
   );
 
-  // API - Activer MQTT (ne lance la connexion que lorsque activé)
-  server.on("/api/mqtt/enable", HTTP_POST, [](AsyncWebServerRequest *request){
-    Serial.println("API: POST /api/mqtt/enable");
-    if (!mqttEnabled) {
-      mqttEnabled = true;
-      Serial.println("MQTT enabled. Initializing connection...");
-      setupMQTT();
-    } else {
-      Serial.println("MQTT is already enabled.");
-    }
-    request->send(200, "application/json", "{\"message\":\"MQTT enabled\"}");
+  // API pour contrôler la connexion MQTT
+  server.on("/api/mqtt/connect", HTTP_POST, [](AsyncWebServerRequest *request){
+    mqttEnabled = true;
+    reconnectMQTT();
+    request->send(200, "application/json", "{\"success\":true, \"message\":\"Tentative de connexion MQTT lancée.\"}");
   });
 
-  // API - Désactiver MQTT (déconnecte et stoppe les tentatives)
-  server.on("/api/mqtt/disable", HTTP_POST, [](AsyncWebServerRequest *request){
-    Serial.println("API: POST /api/mqtt/disable");
-    if (mqttEnabled) {
-      mqttEnabled = false;
-      if (mqttClient.connected()) {
-        Serial.println("Disconnecting MQTT client...");
-        mqttClient.disconnect();
-      }
-      Serial.println("MQTT disabled.");
-    } else {
-      Serial.println("MQTT is already disabled.");
-    }
-    request->send(200, "application/json", "{\"message\":\"MQTT disabled\"}");
+  server.on("/api/mqtt/disconnect", HTTP_POST, [](AsyncWebServerRequest *request){
+    mqttEnabled = false;
+    mqttClient.disconnect();
+    request->send(200, "application/json", "{\"success\":true, \"message\":\"MQTT déconnecté.\"}");
   });
-  
+
   // ElegantOTA pour les mises à jour
   ElegantOTA.begin(&server);
   
-  Serial.println("Web server routes configured");
+  server.begin();
+  Serial.println("Web server started with new architecture.");
 }
