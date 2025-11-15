@@ -35,12 +35,13 @@ void saveConfig();
 void loadIOs();
 void saveIOs();
 void applyIOPinModes();
-void handleIOs();
+void handleIOs(void *pvParameters); // Modified for FreeRTOS
 void setupWebServer();
-// MQTT functions were moved to src/mqtt.cpp and declared in mqtt.h
-void setupNTP();
 void blinkStatusLED(int times, int delayMs);
 
+
+// ===== FreeRTOS Task Handles =====
+TaskHandle_t ioTaskHandle = NULL;
 
 // ===== FONCTION RESET WiFi =====
 // Fonction pour détecter 3 appuis sur le bouton BOOT
@@ -198,9 +199,6 @@ void setup() {
   }
   Serial.println("SPIFFS mounted successfully.");
 
-  // Setup NTP
-  setupNTP();
-
   // Setup MQTT
   setupMQTT();
   if (strlen(config.mqttServer) > 0) {
@@ -216,24 +214,31 @@ void setup() {
 
 // ===== LOOP =====
 void loop() {
+  // The main loop is now responsible for high-frequency tasks only.
+  // I/O handling is moved to a separate FreeRTOS task.
+
   if (WiFi.status() == WL_CONNECTED) {
-    // Only run MQTT processing if the subsystem is explicitly enabled
     if (mqttEnabled) {
       if (!mqttClient.connected()) {
         long now = millis();
+        // Attempt to reconnect every 5 seconds if disconnected.
         if (now - lastMqttReconnect > 5000) {
           lastMqttReconnect = now;
           reconnectMQTT();
         }
       }
+      // This should be called as often as possible.
       mqttClient.loop();
     }
   }
 
-  //timeClient.update();
-  handleIOs();
+  // ElegantOTA loop for web updates.
   ElegantOTA.loop();
-  delay(10);
+
+  // A small delay can be added here if needed to prevent watchdog timeouts,
+  // but it should be as small as possible (e.g., 1ms) or removed entirely
+  // if other tasks yield frequently enough.
+  delay(1);
 }
 
 // ===== CONFIGURATION FUNCTIONS =====
@@ -304,38 +309,45 @@ void applyIOPinModes() {
 }
 
 
-// ===== NTP FUNCTIONS =====
-void setupNTP() {
-  // NTP is now handled via MQTT, this function is kept for potential future use
-  // but is left empty to prevent DNS lookups.
-  Serial.println("NTP setup is now handled via MQTT time synchronization.");
-}
+// ===== I/O HANDLING (FreeRTOS Task) =====
+void handleIOs(void *pvParameters) {
+  Serial.println("✅ I/O handling task started.");
+  struct DebounceInfo {
+    bool lastState;
+    unsigned long lastChangeTime;
+  };
+  DebounceInfo debounce[MAX_IOS];
+  for(int i=0; i<MAX_IOS; i++) {
+    debounce[i] = {HIGH, 0};
+  }
 
-// ===== I/O HANDLING =====
-void handleIOs() {
-  static unsigned long lastCheck = 0;
-  unsigned long now = millis();
-
-  // Check inputs every 50ms for changes
-  if (now - lastCheck > 50) {
-    lastCheck = now;
+  for (;;) { // Infinite loop for the task
+    unsigned long now = millis();
     for (int i = 0; i < ioPinCount; i++) {
       if (ioPins[i].mode == 1) { // INPUT
         bool currentState = digitalRead(ioPins[i].pin);
-        if (currentState != ioPins[i].state) {
-          // Simple debounce: wait for a second read to confirm
-          delay(10); 
-          if (digitalRead(ioPins[i].pin) == currentState) {
-            ioPins[i].state = currentState;
-            Serial.printf("Input '%s' (pin %d) changed to %s\n", ioPins[i].name, ioPins[i].pin, currentState ? "HIGH" : "LOW");
-            
-            char topic[128];
-            snprintf(topic, sizeof(topic), "status/%s", ioPins[i].name);
-            if (mqttEnabled) publishMQTT(topic, currentState ? "1" : "0");
+        if (currentState != debounce[i].lastState) {
+          debounce[i].lastChangeTime = now;
+        }
+        debounce[i].lastState = currentState;
+
+        // After 50ms of stability, if the state is different from the stored state, it's a confirmed change.
+        if ((now - debounce[i].lastChangeTime > 50) && (currentState != ioPins[i].state)) {
+          ioPins[i].state = currentState;
+          Serial.printf("Input '%s' (pin %d) changed to %s\n", ioPins[i].name, ioPins[i].pin, currentState ? "HIGH" : "LOW");
+          
+          char topic[128];
+          snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[i].name);
+          char payload[2];
+          snprintf(payload, sizeof(payload), "%d", currentState ? 1 : 0);
+
+          if (mqttEnabled && mqttClient.connected()) {
+            publishMQTT(topic, payload);
           }
         }
       }
     }
+    vTaskDelay(pdMS_TO_TICKS(20)); // Check inputs every 20ms
   }
 }
 
