@@ -22,6 +22,15 @@ RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 # Dictionnaire pour suivre les commandes en attente de confirmation
 pending_commands = {}
 
+# Mesure de latence réseau
+latency_tracker = {
+    'samples': [],
+    'max_samples': 20,
+    'last_measurement': 0,
+    'avg_latency_us': 0,
+    'ping_times': {}
+}
+
 def get_local_ip():
     """Récupère l'adresse IP locale"""
     try:
@@ -51,7 +60,12 @@ def on_connect(client, userdata, flags, reason_code, properties):
         
         # S'abonner au topic de temps commun
         client.subscribe("esp32/time/sync")
-        print(f"✓ Abonné à: esp32/time/sync\n")
+        print(f"✓ Abonné à: esp32/time/sync")
+        
+        # S'abonner au topic pong pour mesurer la latence
+        pong_topic = f"{DEVICE_NAME}/pong"
+        client.subscribe(pong_topic)
+        print(f"✓ Abonné à: {pong_topic}\n")
     else:
         print(f"✗ Échec de connexion, code: {reason_code}")
 
@@ -60,6 +74,37 @@ def on_message(client, userdata, msg):
     receipt_time = time.time()
     topic = msg.topic
     payload = msg.payload.decode()
+    
+    # Gérer les réponses pong pour mesurer la latence
+    if topic.endswith("/pong"):
+        try:
+            data = json.loads(payload)
+            ping_payload = data.get("ping_payload")
+            
+            if ping_payload and ping_payload in latency_tracker['ping_times']:
+                ping_time = latency_tracker['ping_times'].pop(ping_payload)
+                rtt = (receipt_time - ping_time) * 1000000  # en microsecondes
+                
+                # Ajouter à l'échantillon
+                latency_tracker['samples'].append(rtt)
+                if len(latency_tracker['samples']) > latency_tracker['max_samples']:
+                    latency_tracker['samples'].pop(0)
+                
+                # Calculer la latence moyenne (unidirectionnelle = RTT / 2)
+                avg_rtt = sum(latency_tracker['samples']) / len(latency_tracker['samples'])
+                latency_tracker['avg_latency_us'] = int(avg_rtt / 2)
+                
+                # Envoyer la latence estimée à l'ESP32
+                latency_topic = f"{DEVICE_NAME}/latency"
+                latency_payload = json.dumps({
+                    "estimated_latency_us": latency_tracker['avg_latency_us']
+                })
+                client.publish(latency_topic, latency_payload)
+                
+                print(f"📡 RTT: {rtt/1000:.2f}ms | Latence estimée: {latency_tracker['avg_latency_us']/1000:.2f}ms")
+        except (json.JSONDecodeError, KeyError):
+            pass
+        return
 
     # Gérer les messages de statut JSON
     status_prefix = f"{DEVICE_NAME}/status/"
@@ -211,6 +256,7 @@ def show_menu():
     print(f"{offset+2}. Test séquentiel")
     print(f"{offset+3}. Activer {RELAY_NAMES[0]} dans 5 secondes")
     print(f"{offset+4}. Publier timestamp maintenant")
+    print(f"{offset+5}. Mesurer la qualité de synchronisation")
     print("0. Quitter")
     print("="*50)
 
@@ -257,10 +303,78 @@ def publish_time_now(client):
     else:
         print("⚠ Client MQTT non connecté")
 
+def measure_sync_quality(client):
+    """Mesure la qualité de synchronisation en envoyant plusieurs pings"""
+    if not client.is_connected():
+        print("⚠ Client MQTT non connecté")
+        return
+    
+    print("\n🔬 Mesure de la qualité de synchronisation...")
+    print("Envoi de 10 pings pour mesurer la latence réseau...\n")
+    
+    # Nettoyer les anciens échantillons
+    old_samples = latency_tracker['samples'].copy()
+    latency_tracker['samples'].clear()
+    
+    # Envoyer 10 pings rapides
+    for i in range(10):
+        ping_id = f"measure_{int(time.time() * 1000000)}_{i}"
+        latency_tracker['ping_times'][ping_id] = time.time()
+        client.publish(f"{DEVICE_NAME}/ping", ping_id)
+        time.sleep(0.05)  # 50ms entre chaque ping
+    
+    # Attendre les réponses
+    print("Attente des réponses...")
+    time.sleep(2)
+    
+    # Analyser les résultats
+    if len(latency_tracker['samples']) > 0:
+        rtts_ms = [rtt / 1000.0 for rtt in latency_tracker['samples']]
+        avg_rtt = sum(rtts_ms) / len(rtts_ms)
+        min_rtt = min(rtts_ms)
+        max_rtt = max(rtts_ms)
+        jitter = max_rtt - min_rtt
+        latency_ms = avg_rtt / 2
+        
+        print(f"\n📊 Résultats ({len(rtts_ms)} échantillons):")
+        print(f"  RTT moyen:    {avg_rtt:.3f} ms")
+        print(f"  RTT min:      {min_rtt:.3f} ms")
+        print(f"  RTT max:      {max_rtt:.3f} ms")
+        print(f"  Jitter:       {jitter:.3f} ms")
+        print(f"  Latence est.: {latency_ms:.3f} ms")
+        
+        print(f"\n🎯 Précision de synchronisation estimée: ±{latency_ms:.2f} ms")
+        
+        if latency_ms < 2:
+            print("  ✅ Excellente qualité - précision sub-milliseconde possible")
+        elif latency_ms < 5:
+            print("  ✅ Très bonne qualité - précision de quelques millisecondes")
+        elif latency_ms < 10:
+            print("  ✓ Bonne qualité - précision ~10ms")
+        elif latency_ms < 20:
+            print("  ⚠️  Qualité moyenne - précision ~20ms")
+        else:
+            print("  ❌ Faible qualité - vérifier le réseau")
+    else:
+        print("\n❌ Aucune réponse reçue. Vérifiez la connexion MQTT.")
+        # Restaurer les anciens échantillons
+        latency_tracker['samples'] = old_samples
+
 def publish_time(client):
-    """Publie le timestamp actuel avec précision microseconde"""
+    """Publie le timestamp actuel avec précision microseconde et mesure la latence"""
     while True:
         if client.is_connected():
+            current_loop_time = time.time()
+            
+            # Mesurer la latence toutes les 30 secondes
+            if current_loop_time - latency_tracker['last_measurement'] > 30:
+                # Envoyer un ping pour mesurer la latence
+                ping_id = str(int(current_loop_time * 1000000))
+                latency_tracker['ping_times'][ping_id] = current_loop_time
+                ping_topic = f"{DEVICE_NAME}/ping"
+                client.publish(ping_topic, ping_id)
+                latency_tracker['last_measurement'] = current_loop_time
+            
             # Obtenir le temps avec microsecondes
             current_time = time.time()
             seconds = int(current_time)
@@ -276,7 +390,12 @@ def publish_time(client):
             client.publish(topic, payload, qos=1)  # QoS 1 pour garantir la livraison
             
             time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(seconds))
-            print(f"\u23f0 Timestamp publié: {seconds}.{microseconds:06d} ({time_str}.{microseconds:06d})")
+            
+            # Afficher avec info de latence si disponible
+            if latency_tracker['avg_latency_us'] > 0:
+                print(f"⏰ Sync: {seconds}.{microseconds:06d} | Latence: ±{latency_tracker['avg_latency_us']/1000:.2f}ms")
+            else:
+                print(f"⏰ Sync: {seconds}.{microseconds:06d} (mesure latence en cours...)")
         
         time.sleep(10)  # Synchroniser toutes les 10 secondes
 
@@ -432,6 +551,10 @@ def main():
                 # Publier timestamp maintenant
                 elif choice == num_relays*2 + 4:
                     publish_time_now(client)
+                
+                # Mesurer la qualité de synchronisation
+                elif choice == num_relays*2 + 5:
+                    measure_sync_quality(client)
                 
                 else:
                     print("❌ Option invalide")
