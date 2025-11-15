@@ -17,7 +17,7 @@ extern bool mqttEnabled;
 // MQTT API
 void setupMQTT();
 void reconnectMQTT();
-void publishMQTT(const char* sub_topic, const char* payload);
+void publishMQTT(const char* sub_topic, const char* payload, boolean retained = false);
 void mqtt_callback(char* topic, byte* payload, unsigned int length);
 
 #endif // MQTT_H

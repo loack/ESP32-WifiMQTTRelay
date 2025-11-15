@@ -1,9 +1,13 @@
 #ifndef WEB_SERVER_H
 #define WEB_SERVER_H
 
+#include <Arduino.h>
+#include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "config.h"
+#include "mqtt.h"
+#include <time.h>
 
 extern AsyncWebServer server;
 extern Config config;
@@ -125,7 +129,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <button class="tab active" onclick="switchTab(event, 'status')">Statut & Contrôle</button>
             <button class="tab" onclick="switchTab(event, 'ios')">Configuration I/O</button>
             <button class="tab" onclick="switchTab(event, 'config')">Configuration MQTT</button>
-            <button class="tab" onclick="switchTab(event, 'ntp')">NTP & Heure</button>
+            <button class="tab" onclick="switchTab(event, 'time')">NTP & Heure</button>
             <button class="tab" onclick="switchTab(event, 'update')">Mise à Jour</button>
         </div>
         
@@ -247,29 +251,20 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <!-- TAB NTP -->
-            <div id="ntp" class="tab-content">
-                <h2>Configuration Heure</h2>
-                <div class="card">
-                    <h3>Statut de l'heure</h3>
-                    <div class="status-item">
-                        <span>Heure locale ESP32</span>
-                        <span id="ntp-time">...</span>
+            <div id="time" class="tab-content">
+                <h2>NTP & Heure</h2>
+                <p>La synchronisation de l'heure est maintenant gérée automatiquement via MQTT.</p>
+                <div class='card'>
+                    <div class='card-body'>
+                        <h5 class='card-title'>Heure Actuelle de l'ESP32</h5>
+                        <p class='card-text' id='esp-time'>Chargement...</p>
                     </div>
-                     <p style="font-size: 12px; color: #888; margin-top: 10px;">L'heure est synchronisée via MQTT.</p>
                 </div>
-
-                <div class="card" style="margin-top: 30px;">
-                    <h3>Configuration Fuseau Horaire</h3>
-                    <div class="form-group">
-                        <label>Fuseau horaire (secondes)</label>
-                        <input type="number" id="ntp-offset" placeholder="Ex: 3600 pour GMT+1">
-                    </div>
-                     <div class="form-group">
-                        <label>Heure d'été (secondes)</label>
-                        <input type="number" id="ntp-daylight" placeholder="Ex: 3600 pour +1h">
-                    </div>
-                    <button class="btn btn-primary" onclick="saveNTPConfig()">💾 Enregistrer la Configuration</button>
+                <div class='form-group'>
+                    <label for='timezone'>Fuseau Horaire (format <a href='https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv' target='_blank'>TZ</a>)</label>
+                    <input type='text' id='timezone' class='form-control'>
                 </div>
+                <button onclick='saveTimezone()' class='btn btn-primary'>Sauvegarder Fuseau Horaire</button>
             </div>
             
             <!-- TAB UPDATE -->
@@ -297,7 +292,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (tabName === 'status') loadStatus();
             if (tabName === 'ios') loadIOs();
             if (tabName === 'config') loadConfig();
-            if (tabName === 'ntp') loadNTP();
+            if (tabName === 'time') loadTime();
         }
         
         function loadStatus() {
@@ -353,7 +348,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ name: name, state: state })
-            }).then(r => r.json()).then(data => {
+            }).then r => r.json()).then(data => {
                 console.log(data.message);
                 setTimeout(loadStatus, 200); // Refresh status after a short delay
             });
@@ -449,54 +444,43 @@ const char index_html[] PROGMEM = R"rawliteral(
             .then(data => alert(data.message || 'Configuration enregistrée'));
         }
 
-        function loadNTP() {
-            fetch('/api/ntp')
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('ntp-time').textContent = data.time;
-                document.getElementById('ntp-offset').value = data.gmtOffset;
-                document.getElementById('ntp-daylight').value = data.daylightOffset;
-            });
+        function loadTime() {
+            fetch('/api/time')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('esp-time').textContent = data.localTime || 'N/A';
+                    document.getElementById('timezone').value = data.timezone || 'CET-1CEST,M3.5.0,M10.5.0/3';
+                })
+                .catch(error => {
+                    console.error('Error loading time:', error);
+                    document.getElementById('esp-time').textContent = 'Erreur de chargement';
+                });
         }
 
-        function saveNTPConfig() {
-            const config = {
-                gmtOffset: parseInt(document.getElementById('ntp-offset').value),
-                daylightOffset: parseInt(document.getElementById('ntp-daylight').value)
-            };
-            
-            fetch('/api/ntp', {
+        function saveTimezone() {
+            const timezone = document.getElementById('timezone').value;
+            fetch('/api/timezone', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(config)
-            })
-            .then(r => r.json())
-            .then(data => {
-                alert(data.message || 'Configuration enregistrée');
-                loadNTP();
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `timezone=${encodeURIComponent(timezone)}`
+            }).then(response => {
+                if(response.ok) {
+                    alert('Fuseau horaire sauvegardé. L\\'appareil va redémarrer.');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    alert('Erreur lors de la sauvegarde.');
+                }
             });
         }
 
-        function syncNTP() {
-            // This function is deprecated as sync is handled by MQTT
-            alert("La synchronisation est maintenant gérée automatiquement via MQTT.");
-        }
-
-        function enableMQTT() {
-            fetch('/api/mqtt/enable', { method: 'POST' })
-            .then(r => r.json()).then(data => {
-                alert(data.message);
-                loadStatus();
-            });
-        }
-
-        function disableMQTT() {
-            fetch('/api/mqtt/disable', { method: 'POST' })
-            .then(r => r.json()).then(data => {
-                alert(data.message);
-                loadStatus();
-            });
-        }
+        // Load time data when the page loads and periodically
+        document.addEventListener('DOMContentLoaded', function() {
+            // ... other load functions ...
+            if (document.getElementById('time')) {
+                loadTime();
+                setInterval(loadTime, 5000); // Refresh time every 5 seconds
+            }
+        });
         
         // Initial load
         window.onload = () => {

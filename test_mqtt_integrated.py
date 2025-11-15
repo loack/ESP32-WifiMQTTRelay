@@ -11,11 +11,15 @@ import sys
 import socket
 import os
 import platform
+import json
 
 # ========== CONFIGURATION ========== 
 MQTT_PORT = 1883
 MQTT_BASE_TOPIC = "esp32/io"
 RELAY_NAMES = ["RelaisK1", "RelaisK2"]
+
+# Dictionnaire pour suivre les commandes en attente de confirmation
+pending_commands = {}
 
 def get_local_ip():
     """Récupère l'adresse IP locale"""
@@ -48,8 +52,35 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 def on_message(client, userdata, msg):
     """Appelé lors de la réception d'un message"""
-    timestamp = time.strftime("%H:%M:%S")
-    print(f"📨 [{timestamp}] Message reçu: {msg.topic} = {msg.payload.decode()}")
+    current_time = time.time()
+    topic = msg.topic
+    payload = msg.payload.decode()
+
+    # Gérer les messages de statut JSON
+    status_prefix = f"{MQTT_BASE_TOPIC}/status/"
+    if topic.startswith(status_prefix):
+        relay_name = topic[len(status_prefix):]
+        try:
+            data = json.loads(payload)
+            state = data.get("state", "N/A")
+            esp_timestamp = data.get("timestamp", 0)
+            
+            print(f"📨 Statut reçu pour {relay_name}: {state} (depuis ESP @{esp_timestamp})")
+
+            # Calculer la latence si une commande était en attente
+            if relay_name in pending_commands:
+                send_time = pending_commands.pop(relay_name)
+                latency = (current_time - send_time) * 1000
+                print(f"   └── ⏱️  Latence de la commande: {latency:.2f} ms")
+
+        except json.JSONDecodeError:
+            # Gérer les anciens messages non-JSON pour la compatibilité
+            print(f"📨 Message (non-JSON) reçu: {topic} = {payload}")
+
+    # Gérer les autres messages (disponibilité, etc.)
+    else:
+        print(f"📨 Message reçu: {topic} = {payload}")
+
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
     """Appelé lors de la déconnexion"""
@@ -66,12 +97,17 @@ def set_relay(client, relay_name, state):
     topic = f"{MQTT_BASE_TOPIC}/control/{relay_name}/set"
     payload = "1" if state else "0"
     
+    # Enregistrer le temps d'envoi pour calculer la latence
+    pending_commands[relay_name] = time.time()
+    
     result = client.publish(topic, payload, qos=1)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         action = "ON" if state else "OFF"
         print(f"✓ Commande envoyée: {relay_name} -> {action}")
     else:
         print(f"✗ Erreur lors de l'envoi de la commande")
+        # Si l'envoi échoue, retirer la commande des commandes en attente
+        pending_commands.pop(relay_name, None)
 
 def turn_on(client, relay_name):
     """Active un relais"""
