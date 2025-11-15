@@ -89,6 +89,7 @@ void setupWebServer() {
       io["name"] = ioPins[i].name;
       io["pin"] = ioPins[i].pin;
       io["mode"] = ioPins[i].mode;
+      io["inputType"] = ioPins[i].inputType;
       io["defaultState"] = ioPins[i].defaultState;
     }
     String response;
@@ -113,6 +114,7 @@ void setupWebServer() {
             strlcpy(ioPins[ioPinCount].name, ioData["name"], sizeof(ioPins[ioPinCount].name));
             ioPins[ioPinCount].pin = ioData["pin"];
             ioPins[ioPinCount].mode = ioData["mode"];
+            ioPins[ioPinCount].inputType = ioData["inputType"] | 1; // Default to PULLUP if not specified
             ioPins[ioPinCount].defaultState = ioData["defaultState"];
             ioPinCount++;
         }

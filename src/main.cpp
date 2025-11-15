@@ -383,10 +383,29 @@ void applyIOPinModes() {
     pinMode(STATUS_LED, OUTPUT); // Définit GPIO 23 comme une sortie
     for (int i = 0; i < ioPinCount; i++) {
         if (ioPins[i].mode == 1) { // INPUT
-            pinMode(ioPins[i].pin, INPUT_PULLUP); // Or INPUT, depending on needs
+            // Apply the selected input type
+            switch (ioPins[i].inputType) {
+                case 0:
+                    pinMode(ioPins[i].pin, INPUT);
+                    Serial.printf("Pin %d (%s) configured as INPUT\n", ioPins[i].pin, ioPins[i].name);
+                    break;
+                case 1:
+                    pinMode(ioPins[i].pin, INPUT_PULLUP);
+                    Serial.printf("Pin %d (%s) configured as INPUT_PULLUP\n", ioPins[i].pin, ioPins[i].name);
+                    break;
+                case 2:
+                    pinMode(ioPins[i].pin, INPUT_PULLDOWN);
+                    Serial.printf("Pin %d (%s) configured as INPUT_PULLDOWN\n", ioPins[i].pin, ioPins[i].name);
+                    break;
+                default:
+                    pinMode(ioPins[i].pin, INPUT_PULLUP); // Default fallback
+                    Serial.printf("Pin %d (%s) configured as INPUT_PULLUP (default)\n", ioPins[i].pin, ioPins[i].name);
+                    break;
+            }
         } else if (ioPins[i].mode == 2) { // OUTPUT
             pinMode(ioPins[i].pin, OUTPUT);
             digitalWrite(ioPins[i].pin, ioPins[i].defaultState);
+            Serial.printf("Pin %d (%s) configured as OUTPUT\n", ioPins[i].pin, ioPins[i].name);
         }
     }
     Serial.println("I/O pin modes applied.");

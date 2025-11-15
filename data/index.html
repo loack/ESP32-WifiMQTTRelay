@@ -79,15 +79,16 @@
         <div id="ios" class="tab-content">
             <h2>Configuration des I/O</h2>
             <table id="ios-table">
-                <thead><tr><th>Nom</th><th>Pin</th><th>Mode</th><th>Défaut</th><th>Action</th></tr></thead>
+                <thead><tr><th>Nom</th><th>Pin</th><th>Mode</th><th>Type Input</th><th>Défaut</th><th>Action</th></tr></thead>
                 <tbody id="ios-tbody"></tbody>
             </table>
             <div class="card" style="margin-top: 20px;">
                 <h3>Ajouter un I/O</h3>
                 <div class="form-group"><label for="io-name">Nom</label><input type="text" id="io-name" placeholder="Ex: Lumière Salon"></div>
                 <div class="form-group"><label for="io-pin">Broche (Pin)</label><input type="number" id="io-pin" placeholder="Ex: 23"></div>
-                <div class="form-group"><label for="io-mode">Mode</label><select id="io-mode"><option value="1">Entrée (INPUT)</option><option value="2">Sortie (OUTPUT)</option></select></div>
-                <div class="form-group"><label for="io-default-state">État par défaut (pour sorties)</label><select id="io-default-state"><option value="0">BAS (OFF)</option><option value="1">HAUT (ON)</option></select></div>
+                <div class="form-group"><label for="io-mode">Mode</label><select id="io-mode" onchange="toggleInputTypeField()"><option value="1">Entrée (INPUT)</option><option value="2">Sortie (OUTPUT)</option></select></div>
+                <div class="form-group" id="input-type-group"><label for="io-input-type">Type d'entrée</label><select id="io-input-type"><option value="0">INPUT (flottant)</option><option value="1">INPUT_PULLUP (résistance pull-up)</option><option value="2">INPUT_PULLDOWN (résistance pull-down)</option></select></div>
+                <div class="form-group" id="default-state-group" style="display:none;"><label for="io-default-state">État par défaut (pour sorties)</label><select id="io-default-state"><option value="0">BAS (OFF)</option><option value="1">HAUT (ON)</option></select></div>
                 <button class="btn btn-primary" onclick="addIO()">Ajouter I/O</button>
             </div>
             <button class="btn btn-primary" style="margin-top: 20px;" onclick="saveIOs()">💾 Enregistrer la Configuration I/O</button>
@@ -217,23 +218,41 @@
         const tbody = document.getElementById('ios-tbody');
         tbody.innerHTML = '';
         ioPins.forEach((io, index) => {
-            tbody.innerHTML += `<tr><td>${io.name}</td><td>${io.pin}</td><td>${io.mode == 1 ? 'Entrée' : 'Sortie'}</td><td>${io.defaultState ? 'HAUT' : 'BAS'}</td><td><button class="btn btn-danger btn-small" onclick="deleteIO(${index})">X</button></td></tr>`;
+            const inputTypeText = io.inputType === 0 ? 'INPUT' : (io.inputType === 1 ? 'PULLUP' : 'PULLDOWN');
+            const inputTypeDisplay = io.mode == 1 ? inputTypeText : '-';
+            const defaultStateDisplay = io.mode == 2 ? (io.defaultState ? 'HAUT' : 'BAS') : '-';
+            tbody.innerHTML += `<tr><td>${io.name}</td><td>${io.pin}</td><td>${io.mode == 1 ? 'Entrée' : 'Sortie'}</td><td>${inputTypeDisplay}</td><td>${defaultStateDisplay}</td><td><button class="btn btn-danger btn-small" onclick="deleteIO(${index})">X</button></td></tr>`;
         });
+    }
+
+    function toggleInputTypeField() {
+        const mode = parseInt(document.getElementById('io-mode').value);
+        const inputTypeGroup = document.getElementById('input-type-group');
+        const defaultStateGroup = document.getElementById('default-state-group');
+        if (mode === 1) {
+            inputTypeGroup.style.display = 'block';
+            defaultStateGroup.style.display = 'none';
+        } else {
+            inputTypeGroup.style.display = 'none';
+            defaultStateGroup.style.display = 'block';
+        }
     }
 
     function addIO() {
         const name = document.getElementById('io-name').value;
         const pin = parseInt(document.getElementById('io-pin').value);
         const mode = parseInt(document.getElementById('io-mode').value);
+        const inputType = parseInt(document.getElementById('io-input-type').value);
         const defaultState = parseInt(document.getElementById('io-default-state').value);
         if (!name || isNaN(pin)) {
             alert("Le nom et la broche sont requis.");
             return;
         }
-        ioPins.push({ name, pin, mode, defaultState, state: false });
+        ioPins.push({ name, pin, mode, inputType, defaultState, state: false });
         renderIOTable();
         document.getElementById('io-name').value = '';
         document.getElementById('io-pin').value = '';
+        toggleInputTypeField();
     }
 
     function deleteIO(index) {

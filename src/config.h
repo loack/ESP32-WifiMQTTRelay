@@ -16,6 +16,7 @@ struct IOPin {
   uint8_t pin;
   char name[32];
   uint8_t mode; // 0 = DISABLED, 1 = INPUT, 2 = OUTPUT
+  uint8_t inputType; // For inputs: 0 = INPUT, 1 = INPUT_PULLUP, 2 = INPUT_PULLDOWN
   bool state;   // Current state (for outputs) or last read state (for inputs)
   bool defaultState; // Default state at boot for outputs
 };
