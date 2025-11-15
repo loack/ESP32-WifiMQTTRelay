@@ -41,7 +41,7 @@ void executeCommand(int pin, int state) {
     }
   }
   if(pinIndex != -1) {
-    snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[pinIndex].name);
+    snprintf(topic, sizeof(topic), "%s/status/%s", config.deviceName, ioPins[pinIndex].name);
     
     JsonDocument doc;
     doc["state"] = state;
@@ -58,7 +58,7 @@ void executeCommand(int pin, int state) {
 
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     String topicStr = String(topic);
-    String baseTopic = String(config.mqttTopic);
+    String baseTopic = String(config.deviceName);
 
     // Convert payload to string for logging and parsing
     char message[length + 1];
@@ -68,8 +68,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     Serial.printf("[%s] MQTT message arrived on topic [%s]: %s\n", getFormattedTime().c_str(), topic, message);
 
     // Handle time synchronization first, as it's a critical service
-    String timeSyncTopic = baseTopic + "/time/sync";
-    if (topicStr.equals(timeSyncTopic)) {
+    // Le topic de temps est commun à tous les appareils
+    if (topicStr.equals("esp32/time/sync")) {
         unsigned long unix_time = atol(message);
         if (unix_time > 1000000000) { // Basic validation of timestamp
             timeval tv;
@@ -153,19 +153,25 @@ void reconnectMQTT() {
   clientId += String(random(0xffff), HEX);
   if (mqttClient.connect(clientId.c_str(), config.mqttUser, config.mqttPassword)) {
     Serial.println("connected");
+    Serial.println();
+    Serial.println("========================================");
+    Serial.println("✓ Client MQTT connecté au broker");
     
     // Publish availability
-    publishMQTT("availability", "online", true);
+    char availabilityTopic[128];
+    snprintf(availabilityTopic, sizeof(availabilityTopic), "%s/availability", config.deviceName);
+    publishMQTT(availabilityTopic, "online", true);
 
     // Subscribe to control topics
-    String controlTopic = String(config.mqttTopic) + "/control/#";
+    String controlTopic = String(config.deviceName) + "/control/#";
     mqttClient.subscribe(controlTopic.c_str());
-    Serial.printf("Subscribed to %s\n", controlTopic.c_str());
+    Serial.printf("✓ Abonné à: %s\n", controlTopic.c_str());
 
-    // Subscribe to time sync topic
-    String timeTopic = String(config.mqttTopic) + "/time/sync";
-    mqttClient.subscribe(timeTopic.c_str());
-    Serial.printf("Subscribed to %s\n", timeTopic.c_str());
+    // Subscribe to time sync topic (commun à tous les ESP32)
+    mqttClient.subscribe("esp32/time/sync");
+    Serial.printf("✓ Abonné à: esp32/time/sync\n");
+    Serial.println("========================================");
+    Serial.println();
 
     // Publish current state of all pins as retained messages
     for (int i = 0; i < ioPinCount; i++) {
@@ -177,7 +183,7 @@ void reconnectMQTT() {
         serializeJson(doc, jsonBuffer);
 
         char statusTopic[128];
-        snprintf(statusTopic, sizeof(statusTopic), "status/%s", ioPins[i].name);
+        snprintf(statusTopic, sizeof(statusTopic), "%s/status/%s", config.deviceName, ioPins[i].name);
         publishMQTT(statusTopic, jsonBuffer, true);
     }
 
@@ -188,14 +194,12 @@ void reconnectMQTT() {
   }
 }
 
-void publishMQTT(const char* sub_topic, const char* payload, boolean retained) {
+void publishMQTT(const char* topic, const char* payload, boolean retained) {
     if (mqttClient.connected()) {
-        char fullTopic[128];
-        snprintf(fullTopic, sizeof(fullTopic), "%s/%s", config.mqttTopic, sub_topic);
-        if (mqttClient.publish(fullTopic, payload, retained)) {
-            Serial.printf("[%s] MQTT message published to [%s]: %s\n", getFormattedTime().c_str(), fullTopic, payload);
+        if (mqttClient.publish(topic, payload, retained)) {
+            Serial.printf("[%s] MQTT message published to [%s]: %s\n", getFormattedTime().c_str(), topic, payload);
         } else {
-            Serial.printf("[%s] MQTT publish failed to [%s]\n", getFormattedTime().c_str(), fullTopic);
+            Serial.printf("[%s] MQTT publish failed to [%s]\n", getFormattedTime().c_str(), topic);
         }
     }
 }

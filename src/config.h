@@ -40,8 +40,15 @@ struct ScheduledCommand {
 
 // Main configuration structure
 struct Config {
+  char deviceName[32];
   char adminPassword[32];
   
+  // Network settings
+  bool useStaticIP;
+  char staticIP[16];
+  char staticGateway[16];
+  char staticSubnet[16];
+
   // MQTT Settings
   char mqttServer[64];
   int mqttPort;

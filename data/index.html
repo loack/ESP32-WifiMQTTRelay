@@ -51,6 +51,7 @@
         <button class="tab active" onclick="switchTab(event, 'status')">Statut & Contrôle</button>
         <button class="tab" onclick="switchTab(event, 'ios')">Configuration I/O</button>
         <button class="tab" onclick="switchTab(event, 'config')">Configuration Système</button>
+        <button class="tab" onclick="switchTab(event, 'network')">Réseau</button>
         <button class="tab" onclick="switchTab(event, 'update')">Mise à Jour</button>
     </div>
     <div class="content">
@@ -59,6 +60,7 @@
             <h2>Statut du Système</h2>
             <div class="grid">
                 <div class="card">
+                    <div class="status-item"><span>Nom de l'appareil</span><span id="device-name">...</span></div>
                     <div class="status-item"><span>WiFi</span><span id="wifi-status">...</span></div>
                     <div class="status-item"><span>Adresse IP</span><span id="ip-address">...</span></div>
                     <div class="status-item"><span>MQTT</span><span id="mqtt-status">...</span></div>
@@ -91,11 +93,11 @@
         <div id="config" class="tab-content">
             <h2>Configuration MQTT & Système</h2>
             <div class="card">
+                <div class="form-group"><label>Nom de l'appareil</label><input type="text" id="config-device-name"></div>
                 <div class="form-group"><label>Serveur MQTT</label><input type="text" id="mqtt-server"></div>
                 <div class="form-group"><label>Port</label><input type="number" id="mqtt-port" value="1883"></div>
                 <div class="form-group"><label>Utilisateur</label><input type="text" id="mqtt-user"></div>
                 <div class="form-group"><label>Mot de passe</label><input type="password" id="mqtt-password" placeholder="Laisser vide pour ne pas changer"></div>
-                <div class="form-group"><label>Topic de base</label><input type="text" id="mqtt-topic"></div>
                 <button class="btn btn-primary" onclick="saveConfig()">💾 Enregistrer & Redémarrer</button>
             </div>
             <h2 style="margin-top: 30px;">Contrôle de la Connexion</h2>
@@ -105,6 +107,25 @@
                     <button class="btn btn-primary" onclick="connectMQTT()">Connecter</button>
                     <button class="btn btn-danger" onclick="disconnectMQTT()">Déconnecter</button>
                 </div>
+            </div>
+        </div>
+        <!-- TAB NETWORK -->
+        <div id="network" class="tab-content">
+            <h2>Configuration Réseau</h2>
+            <div class="card">
+                <div class="form-group">
+                    <label>Type d'adressage</label>
+                    <select id="ip-type" onchange="toggleStaticFields()">
+                        <option value="dhcp">DHCP (Automatique)</option>
+                        <option value="static">IP Statique (Manuel)</option>
+                    </select>
+                </div>
+                <div id="static-ip-fields" style="display:none;">
+                    <div class="form-group"><label>Adresse IP</label><input type="text" id="static-ip"></div>
+                    <div class="form-group"><label>Passerelle (Gateway)</label><input type="text" id="static-gateway"></div>
+                    <div class="form-group"><label>Masque de sous-réseau</label><input type="text" id="static-subnet"></div>
+                </div>
+                <button class="btn btn-primary" onclick="saveConfig()">💾 Enregistrer & Redémarrer</button>
             </div>
         </div>
         <!-- TAB UPDATE -->
@@ -127,11 +148,17 @@
         evt.currentTarget.classList.add('active');
         if (tabName === 'status') loadStatus();
         if (tabName === 'ios') loadIOs();
-        if (tabName === 'config') loadConfig();
+        if (tabName === 'config' || tabName === 'network') loadConfig();
+    }
+
+    function toggleStaticFields() {
+        const ipType = document.getElementById('ip-type').value;
+        document.getElementById('static-ip-fields').style.display = (ipType === 'static') ? 'block' : 'none';
     }
 
     function loadStatus() {
         fetch('/api/status').then(r => r.json()).then(data => {
+            document.getElementById('device-name').textContent = data.deviceName;
             document.getElementById('wifi-status').innerHTML = data.wifi ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
             document.getElementById('ip-address').textContent = data.ip;
             document.getElementById('mqtt-status').innerHTML = data.mqtt ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
@@ -224,20 +251,30 @@
 
     function loadConfig() {
         fetch('/api/config').then(r => r.json()).then(data => {
+            document.getElementById('config-device-name').value = data.deviceName;
             document.getElementById('mqtt-server').value = data.mqttServer;
             document.getElementById('mqtt-port').value = data.mqttPort;
             document.getElementById('mqtt-user').value = data.mqttUser;
-            document.getElementById('mqtt-topic').value = data.mqttTopic;
+
+            document.getElementById('ip-type').value = data.useStaticIP ? 'static' : 'dhcp';
+            document.getElementById('static-ip').value = data.staticIP;
+            document.getElementById('static-gateway').value = data.staticGateway;
+            document.getElementById('static-subnet').value = data.staticSubnet;
+            toggleStaticFields();
         });
     }
 
     function saveConfig() {
         const config = {
+            deviceName: document.getElementById('config-device-name').value,
             mqttServer: document.getElementById('mqtt-server').value,
             mqttPort: parseInt(document.getElementById('mqtt-port').value),
             mqttUser: document.getElementById('mqtt-user').value,
             mqttPassword: document.getElementById('mqtt-password').value,
-            mqttTopic: document.getElementById('mqtt-topic').value,
+            useStaticIP: document.getElementById('ip-type').value === 'static',
+            staticIP: document.getElementById('static-ip').value,
+            staticGateway: document.getElementById('static-gateway').value,
+            staticSubnet: document.getElementById('static-subnet').value
         };
         fetch('/api/config', {
             method: 'POST',

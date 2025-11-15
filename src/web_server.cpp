@@ -25,6 +25,7 @@ void setupWebServer() {
   // API pour le statut système complet
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
     JsonDocument doc;
+    doc["deviceName"] = config.deviceName;
     doc["wifi"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = WiFi.localIP().toString();
     doc["mqtt"] = mqttClient.connected();
@@ -124,6 +125,11 @@ void setupWebServer() {
   // API pour récupérer la configuration système
   server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
     JsonDocument doc;
+    doc["deviceName"] = config.deviceName;
+    doc["useStaticIP"] = config.useStaticIP;
+    doc["staticIP"] = config.staticIP;
+    doc["staticGateway"] = config.staticGateway;
+    doc["staticSubnet"] = config.staticSubnet;
     doc["mqttServer"] = config.mqttServer;
     doc["mqttPort"] = config.mqttPort;
     doc["mqttUser"] = config.mqttUser;
@@ -145,6 +151,12 @@ void setupWebServer() {
         return;
       }
     
+      if (doc["deviceName"]) strlcpy(config.deviceName, doc["deviceName"], sizeof(config.deviceName));
+      config.useStaticIP = doc["useStaticIP"];
+      if (doc["staticIP"]) strlcpy(config.staticIP, doc["staticIP"], sizeof(config.staticIP));
+      if (doc["staticGateway"]) strlcpy(config.staticGateway, doc["staticGateway"], sizeof(config.staticGateway));
+      if (doc["staticSubnet"]) strlcpy(config.staticSubnet, doc["staticSubnet"], sizeof(config.staticSubnet));
+
       if (doc["mqttServer"]) strlcpy(config.mqttServer, doc["mqttServer"], sizeof(config.mqttServer));
       if (doc["mqttPort"]) config.mqttPort = doc["mqttPort"];
       if (doc["mqttUser"]) strlcpy(config.mqttUser, doc["mqttUser"], sizeof(config.mqttUser));

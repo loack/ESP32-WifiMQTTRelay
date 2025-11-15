@@ -144,23 +144,23 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
   
-  // Configure une IP statique si le DHCP est désactivé sur le routeur/switch
-  // ADAPTE ces valeurs : localIP doit être unique dans le réseau
-  IPAddress localIP(192, 168, 1, 80);   // <-- choisir une IP libre
-  IPAddress gateway(192, 168, 1, 1);   // <-- gateway fournie
-  IPAddress subnet(255, 255, 255, 0);
-  IPAddress dns1(8, 8, 8, 8);
-  if (WiFi.config(localIP, gateway, subnet, dns1) == false) {
-    Serial.println("⚠️ WiFi.config échoué");
-  } else {
-    Serial.print("✓ Static IP configured: ");
-    Serial.println(localIP);
+  if (config.useStaticIP) {
+    IPAddress localIP, gateway, subnet, dns1(8, 8, 8, 8);
+    localIP.fromString(config.staticIP);
+    gateway.fromString(config.staticGateway);
+    subnet.fromString(config.staticSubnet);
+    if (WiFi.config(localIP, gateway, subnet, dns1) == false) {
+      Serial.println("⚠️ Static IP Configuration Failed");
+    } else {
+      Serial.print("✓ Static IP configured: ");
+      Serial.println(localIP);
+    }
   }
   
   digitalWrite(STATUS_LED, HIGH);
   
   
-  if (!wifiManager.autoConnect("ESP32-WifiMQTTRelay-Setup")) {
+  if (!wifiManager.autoConnect((String(config.deviceName) + "-Setup").c_str())) {
     Serial.println("\n✗✗✗ WiFiManager failed to connect ✗✗✗");
     Serial.println("Restarting in 5 seconds...");
     digitalWrite(STATUS_LED, LOW);
@@ -283,6 +283,14 @@ void processScheduledCommands() {
 
 // ===== CONFIGURATION FUNCTIONS =====
 void loadConfig() {
+  preferences.getString("deviceName", config.deviceName, sizeof(config.deviceName));
+  if (strlen(config.deviceName) == 0) strcpy(config.deviceName, "esp32");
+
+  config.useStaticIP = preferences.getBool("useStaticIP", false);
+  preferences.getString("staticIP", config.staticIP, sizeof(config.staticIP));
+  preferences.getString("staticGW", config.staticGateway, sizeof(config.staticGateway));
+  preferences.getString("staticSN", config.staticSubnet, sizeof(config.staticSubnet));
+
   preferences.getString("adminPw", config.adminPassword, sizeof(config.adminPassword));
   if (strlen(config.adminPassword) == 0) strcpy(config.adminPassword, "admin");
 
@@ -291,7 +299,9 @@ void loadConfig() {
   preferences.getString("mqttUser", config.mqttUser, sizeof(config.mqttUser));
   preferences.getString("mqttPass", config.mqttPassword, sizeof(config.mqttPassword));
   preferences.getString("mqttTop", config.mqttTopic, sizeof(config.mqttTopic));
-  if (strlen(config.mqttTopic) == 0) strcpy(config.mqttTopic, "esp32/io");
+  if (strlen(config.mqttTopic) == 0) {
+    snprintf(config.mqttTopic, sizeof(config.mqttTopic), "%s/io", config.deviceName);
+  }
 
   // NTP settings are now for display and offset, not for server connection
   config.gmtOffset_sec = preferences.getLong("gmtOffset", 3600);
@@ -302,6 +312,12 @@ void loadConfig() {
 }
 
 void saveConfig() {
+  preferences.putString("deviceName", config.deviceName);
+  preferences.putBool("useStaticIP", config.useStaticIP);
+  preferences.putString("staticIP", config.staticIP);
+  preferences.putString("staticGW", config.staticGateway);
+  preferences.putString("staticSN", config.staticSubnet);
+  
   preferences.putString("adminPw", config.adminPassword);
   preferences.putString("mqttSrv", config.mqttServer);
   preferences.putInt("mqttPort", config.mqttPort);

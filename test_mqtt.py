@@ -15,7 +15,7 @@ import json
 
 # ========== CONFIGURATION ========== 
 MQTT_PORT = 1883
-MQTT_BASE_TOPIC = "esp32/io"
+DEVICE_NAME = "laser"  # Nom de l'appareil ESP32 (doit correspondre au nom configuré sur l'ESP32)
 RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 
 # Dictionnaire pour suivre les commandes en attente de confirmation
@@ -39,14 +39,18 @@ def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
         print(f"\n✓ Client connecté au broker MQTT")
         # S'abonner aux topics de statut de tous les relais
-        status_topic = f"{MQTT_BASE_TOPIC}/status/#"
+        status_topic = f"{DEVICE_NAME}/status/#"
         client.subscribe(status_topic)
         print(f"✓ Abonné à: {status_topic}")
 
         # S'abonner aux topics de disponibilité
-        availability_topic = f"{MQTT_BASE_TOPIC}/availability"
+        availability_topic = f"{DEVICE_NAME}/availability"
         client.subscribe(availability_topic)
-        print(f"✓ Abonné à: {availability_topic}\n")
+        print(f"✓ Abonné à: {availability_topic}")
+        
+        # S'abonner au topic de temps commun
+        client.subscribe("esp32/time/sync")
+        print(f"✓ Abonné à: esp32/time/sync\n")
     else:
         print(f"✗ Échec de connexion, code: {reason_code}")
 
@@ -57,7 +61,7 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode()
 
     # Gérer les messages de statut JSON
-    status_prefix = f"{MQTT_BASE_TOPIC}/status/"
+    status_prefix = f"{DEVICE_NAME}/status/"
     if topic.startswith(status_prefix):
         relay_name = topic[len(status_prefix):]
         try:
@@ -111,7 +115,7 @@ def on_publish(client, userdata, mid, reason_code=None, properties=None):
 # ========== FONCTIONS DE CONTRÔLE ==========
 def set_relay(client, relay_name, state, exec_at=None):
     """Active ou désactive un relais, immédiatement ou de manière programmée"""
-    topic = f"{MQTT_BASE_TOPIC}/control/{relay_name}/set"
+    topic = f"{DEVICE_NAME}/control/{relay_name}/set"
     
     payload_data = {"state": 1 if state else 0}
     if exec_at:
@@ -206,7 +210,7 @@ def publish_time(client):
     while True:
         if client.is_connected():
             timestamp = int(time.time())
-            topic = f"{MQTT_BASE_TOPIC}/time/sync"
+            topic = "esp32/time/sync"  # Topic commun à tous les ESP32
             client.publish(topic, str(timestamp), qos=0)
             # print(f"-> Time published: {timestamp}") # Décommenter pour debug
         time.sleep(60) # Publie toutes les 60 secondes
@@ -282,7 +286,7 @@ def main():
     print("Assurez-vous que votre ESP32 est configuré avec les paramètres suivants:")
     print(f"  - MQTT Server: \"{local_ip}\"")
     print(f"  - MQTT Port:   {MQTT_PORT}")
-    print(f"  - Base Topic:  \"{MQTT_BASE_TOPIC}\"")
+    print(f"  - Nom appareil: \"{DEVICE_NAME}\"") 
     print(f"\n(Votre ESP32 doit être sur le même réseau Wi-Fi que ce PC)")
     print("="*60)
     
