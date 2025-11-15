@@ -115,8 +115,14 @@ mosquitto_pub -h localhost -t "esp32/io/control/relay1/set" -m "0"
 - Vérifiez que les relais sont configurés dans l'ESP32
 
 ### Accès réseau à l'ESP32 (ping / HTTP inaccessible depuis le PC)
-
 Si l'ESP32 a une IP fixe sur le LAN mais que votre PC ne peut pas le pinguer ni accéder au serveur web, il est possible que le trafic vers ce réseau ne passe pas directement par votre interface Ethernet (ex. VPN actif, route par défaut différente, ou VLAN/switch isolant). Une solution de contournement rapide (temporaire) est d'ajouter une route spécifique sur votre PC vers l'IP de l'ESP32.
+
+#### Mémo VPN/Tailscale
+Si Tailscale ou un autre VPN est activé sur le PC, il peut modifier la table de routage et empêcher l'accès direct aux appareils du réseau local (LAN) comme l'ESP32. Pour tester la connexion :
+- Désactive temporairement Tailscale/VPN et réessaie le ping ou l'accès HTTP.
+- Si besoin, ajoute une route spécifique comme indiqué ci-dessus.
+- Vérifie que le réseau Windows est bien en "Privé" et que le pare-feu autorise le trafic local.
+Cela peut résoudre les problèmes d'accès à l'ESP32 depuis le PC.
 
 Exemple (remplacez `enp1s0` par votre interface Ethernet si nécessaire) :
 
@@ -131,3 +137,4 @@ Explications et points importants :
 - Si après l'ajout de la route vous voyez encore des problèmes (pas d'ARP reply), vérifiez la configuration VLAN du switch et la possibilité d'isolation AP (guest network) côté routeur.
 
 Si tu veux, ajoute ici la sortie de `ip route show`, `ip addr`, ou du moniteur série de l'ESP (IP Address / Gateway) et je t'aide à rendre la route persistante ou à corriger la configuration réseau.
+

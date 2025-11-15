@@ -13,7 +13,7 @@ import socket
 # ========== CONFIGURATION ==========
 MQTT_PORT = 1883
 MQTT_BASE_TOPIC = "esp32/io"
-RELAY_NAMES = ["relay1", "relay2"]
+RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 
 def get_local_ip():
     """Récupère l'adresse IP locale"""
@@ -26,48 +26,28 @@ def get_local_ip():
     except:
         return "127.0.0.1"
 
-# ========== BROKER MQTT SIMPLE ==========
-class SimpleMQTTBroker:
-    """Broker MQTT simple basé sur un dictionnaire de topics"""
-    
-    def __init__(self, port=1883):
-        self.port = port
-        self.clients = []
-        self.subscriptions = {}  # client -> [topics]
-        self.messages = {}  # topic -> message
-        self.running = False
-        self.local_ip = get_local_ip()
-        
-    def start(self):
-        """Démarre le broker (simulation)"""
-        self.running = True
-        print(f"🟢 Broker MQTT simulé démarré")
-        print(f"   IP: {self.local_ip}")
-        print(f"   Port: {self.port}")
-        print(f"   Topics base: {MQTT_BASE_TOPIC}/#")
-        
-    def stop(self):
-        """Arrête le broker"""
-        self.running = False
-        print("🔴 Broker MQTT arrêté")
-
 # ========== CLIENT MQTT ==========
-broker_sim = SimpleMQTTBroker(MQTT_PORT)
 
 def on_connect(client, userdata, flags, reason_code, properties):
     """Appelé lors de la connexion au broker"""
     if reason_code == 0:
         print(f"\n✓ Client connecté au broker MQTT")
+        # S'abonner aux topics de statut de tous les relais
         status_topic = f"{MQTT_BASE_TOPIC}/status/#"
         client.subscribe(status_topic)
-        print(f"✓ Abonné à: {status_topic}\n")
+        print(f"✓ Abonné à: {status_topic}")
+
+        # S'abonner aux topics de disponibilité
+        availability_topic = f"{MQTT_BASE_TOPIC}/availability"
+        client.subscribe(availability_topic)
+        print(f"✓ Abonné à: {availability_topic}\n")
     else:
         print(f"✗ Échec de connexion, code: {reason_code}")
 
 def on_message(client, userdata, msg):
     """Appelé lors de la réception d'un message"""
     timestamp = time.strftime("%H:%M:%S")
-    print(f"📨 [{timestamp}] {msg.topic} = {msg.payload.decode()}")
+    print(f"📨 [{timestamp}] Message reçu: {msg.topic} = {msg.payload.decode()}")
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
     """Appelé lors de la déconnexion"""
@@ -87,9 +67,9 @@ def set_relay(client, relay_name, state):
     result = client.publish(topic, payload, qos=1)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         action = "ON" if state else "OFF"
-        print(f"✓ Commande: {relay_name} -> {action}")
+        print(f"✓ Commande envoyée: {relay_name} -> {action}")
     else:
-        print(f"✗ Erreur lors de l'envoi")
+        print(f"✗ Erreur lors de l'envoi de la commande")
 
 def turn_on(client, relay_name):
     """Active un relais"""
@@ -119,7 +99,6 @@ def show_menu():
     offset = len(RELAY_NAMES) * 2
     print(f"{offset+1}. Toggle tous les relais")
     print(f"{offset+2}. Test séquentiel")
-    print(f"{offset+3}. Afficher l'IP du broker")
     print("0. Quitter")
     print("="*50)
 
@@ -146,51 +125,96 @@ def toggle_all(client):
         turn_off(client, relay)
         time.sleep(0.2)
 
-def show_broker_info():
-    """Affiche les informations du broker"""
-    print("\n" + "="*50)
-    print("INFORMATION BROKER MQTT")
-    print("="*50)
-    print(f"IP locale: {broker_sim.local_ip}")
-    print(f"Port: {broker_sim.port}")
-    print(f"\n📋 Configuration ESP32:")
-    print(f"   MQTT Server: {broker_sim.local_ip}")
-    print(f"   MQTT Port: {broker_sim.port}")
-    print(f"   MQTT Topic: {MQTT_BASE_TOPIC}")
-    print("="*50)
-
 # ========== PROGRAMME PRINCIPAL ==========
 def main():
     """Fonction principale"""
     print("="*60)
-    print("ESP32 IO Controller - Test MQTT avec Broker Externe")
+    print("ESP32 IO Controller - Script de Test MQTT")
     print("="*60)
     
     local_ip = get_local_ip()
     
-    print(f"\n⚠️  IMPORTANT: Ce script nécessite un broker MQTT externe!")
-    print(f"\n📋 Options:")
-    print(f"   1. Installer Mosquitto localement")
-    print(f"   2. Utiliser un broker cloud: test.mosquitto.org")
-    print(f"   3. Utiliser un broker sur votre réseau")
+    import paho.mqtt.client as mqtt
+import threading
+import time
+import sys
+import socket
+import os
+import platform
+
+# ========== CONFIGURATION ========== 
+MQTT_PORT = 1883
+# ... existing code ...
+def toggle_all(client):
+    """Active puis désactive tous les relais"""
+# ... existing code ...
+    for relay in RELAY_NAMES:
+        turn_off(client, relay)
+        time.sleep(0.2)
+
+def restart_mosquitto():
+    """Redémarre le service Mosquitto pour s'assurer qu'il est bien lancé."""
+    if platform.system() == "Windows":
+        print("\n🔄 Tentative de redémarrage du service Mosquitto sur Windows...")
+        try:
+            # Arrêter le service
+            result_stop = os.system("net stop mosquitto > nul 2>&1")
+            if result_stop == 0:
+                print("   - Service Mosquitto arrêté.")
+            
+            time.sleep(2) # Attendre un peu
+
+            # Démarrer le service
+            result_start = os.system("net start mosquitto > nul 2>&1")
+            if result_start == 0:
+                print("   - Service Mosquitto démarré.")
+                print("✓ Le service Mosquitto semble avoir redémarré avec succès.")
+                time.sleep(3) # Laisse le temps au broker de s'initialiser
+                return True
+            else:
+                print("✗ Impossible de démarrer le service Mosquitto.")
+                print("  -> Assurez-vous que le script est exécuté avec les droits d'administrateur.")
+                return False
+
+        except Exception as e:
+            print(f"✗ Une erreur est survenue lors de la tentative de redémarrage: {e}")
+            return False
+    else:
+        # Pour info, si le script est utilisé sur un autre OS
+        print("\nℹ️  Le redémarrage automatique de Mosquitto n'est implémenté que pour Windows.")
+        return True
+
+# ========== PROGRAMME PRINCIPAL ========== 
+def main():
+    """Fonction principale"""
+# ... existing code ...
+    print("ESP32 IO Controller - Script de Test MQTT")
+    print("="*60)
     
-    print(f"\n💡 Configurez votre ESP32 avec:")
-    print(f"   MQTT Server: {local_ip} (si Mosquitto local)")
-    print(f"   MQTT Port: 1883")
-    print(f"   MQTT Topic: {MQTT_BASE_TOPIC}")
+    # Tenter de redémarrer Mosquitto
+    if not restart_mosquitto():
+        input("\nAppuyez sur Entrée pour continuer malgré l'échec du redémarrage...")
+
+    local_ip = get_local_ip()
+    
+    print(f"\n✅ L'adresse IP de ce PC est: {local_ip}")
+    print(f"   L'adresse IP de ce PC est: {local_ip}")
     
     print("\n" + "="*60)
+    print("📋 CONFIGURATION REQUISE POUR L'ESP32")
+    print("="*60)
+    print("Assurez-vous que votre ESP32 est configuré avec les paramètres suivants:")
+    print(f"  - MQTT Server: \"{local_ip}\"")
+    print(f"  - MQTT Port:   {MQTT_PORT}")
+    print(f"  - Base Topic:  \"{MQTT_BASE_TOPIC}\"")
+    print(f"\n(Votre ESP32 doit être sur le même réseau Wi-Fi que ce PC)")
+    print("="*60)
     
-    # Demander l'adresse du broker
-    print("\nEntrez l'adresse du broker MQTT à utiliser:")
-    print(f"  - Appuyez sur Entrée pour utiliser: {local_ip} (local)")
-    print(f"  - Ou entrez une autre adresse (ex: test.mosquitto.org)")
+    broker_address = local_ip
+   
     
     try:
-        broker_address = "test.mosquitto.org"
-        print(f"\nUtilisation du broker de test : {broker_address}")
-        
-        print(f"\n🔗 Connexion au broker: {broker_address}:{MQTT_PORT}")
+        print(f"\n🔗 Tentative de connexion au broker: {broker_address}:{MQTT_PORT}...")
         
         # Créer le client MQTT
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="ESP32_Test_Client")
@@ -239,10 +263,6 @@ def main():
                 elif choice == num_relays*2 + 2:
                     test_sequence(client)
                 
-                # Afficher info broker
-                elif choice == num_relays*2 + 3:
-                    print(f"\n📋 Broker utilisé: {broker_address}:{MQTT_PORT}")
-                
                 else:
                     print("❌ Option invalide")
                 
@@ -255,15 +275,13 @@ def main():
                 break
     
     except ConnectionRefusedError:
-        print(f"\n❌ Impossible de se connecter au broker {broker_address}:{MQTT_PORT}")
+        print(f"\n❌ IMPOSSIBLE DE SE CONNECTER AU BROKER {broker_address}:{MQTT_PORT}")
         print("\n💡 Solutions:")
-        print("   1. Installer et démarrer Mosquitto:")
-        print("      Windows: choco install mosquitto")
-        print("      Linux: sudo apt-get install mosquitto")
-        print("   2. Utiliser: python mqtt_broker.py")
-        print("   3. Utiliser un broker cloud: test.mosquitto.org")
+        print("   1. Assurez-vous que Mosquitto est bien démarré sur ce PC.")
+        print("   2. Vérifiez que votre pare-feu ne bloque pas le port 1883.")
+        print("   3. Essayez de redémarrer Mosquitto.")
     except Exception as e:
-        print(f"❌ Erreur: {e}")
+        print(f"❌ Une erreur inattendue est survenue: {e}")
     
     finally:
         # Nettoyer et fermer la connexion
@@ -275,8 +293,4 @@ def main():
             pass
 
 if __name__ == "__main__":
-    print("\n💡 Assurez-vous qu'un broker MQTT est démarré!")
-    print("   Exécutez 'mosquitto' dans un autre terminal")
-    print("   Ou utilisez: python mqtt_broker.py\n")
-    
     main()
