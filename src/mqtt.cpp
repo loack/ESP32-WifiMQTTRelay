@@ -153,6 +153,7 @@ void reconnectMQTT() {
   clientId += String(random(0xffff), HEX);
   if (mqttClient.connect(clientId.c_str(), config.mqttUser, config.mqttPassword)) {
     Serial.println("connected");
+    blinkStatusLED(2, 100);  // Signal de connexion MQTT réussie
     Serial.println();
     Serial.println("========================================");
     Serial.println("✓ Client MQTT connecté au broker");

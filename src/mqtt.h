@@ -15,6 +15,9 @@ extern ScheduledCommand scheduledCommands[];
 // Control whether MQTT subsystem should be active (can be toggled at runtime)
 extern bool mqttEnabled;
 
+// Fonction pour faire clignoter la LED (définie dans main.cpp)
+void blinkStatusLED(int times, int delayMs);
+
 // MQTT API
 void setupMQTT();
 void reconnectMQTT();

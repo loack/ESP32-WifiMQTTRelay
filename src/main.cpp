@@ -106,6 +106,21 @@ void setup() {
 
   // Load configuration from flash
   preferences.begin("generic-io", false);
+  
+  // Check WiFi connection failure counter
+  int wifiFailCount = preferences.getInt("wifiFailCount", 0);
+  Serial.printf("WiFi failure count: %d/3\n", wifiFailCount);
+  
+  if (wifiFailCount >= 3) {
+    Serial.println("\n⚠️⚠️⚠️ TOO MANY WiFi FAILURES ⚠️⚠️⚠️");
+    Serial.println("Resetting WiFi credentials...");
+    wifiManager.resetSettings();
+    preferences.putInt("wifiFailCount", 0);
+    delay(2000);
+    Serial.println("WiFi reset complete. Restarting...");
+    ESP.restart();
+  }
+  
   loadConfig();
   loadIOs();
   Serial.println("Configuration and I/O settings loaded.");
@@ -157,18 +172,29 @@ void setup() {
     }
   }
   
-  digitalWrite(STATUS_LED, HIGH);
-  
+  // Faire clignoter la LED pendant la tentative de connexion
+  blinkStatusLED(5, 100);
   
   if (!wifiManager.autoConnect((String(config.deviceName) + "-Setup").c_str())) {
     Serial.println("\n✗✗✗ WiFiManager failed to connect ✗✗✗");
+    
+    // Incrémenter le compteur d'échecs
+    int failCount = preferences.getInt("wifiFailCount", 0);
+    failCount++;
+    preferences.putInt("wifiFailCount", failCount);
+    Serial.printf("WiFi failure count incremented to: %d/3\n", failCount);
+    
     Serial.println("Restarting in 5 seconds...");
-    digitalWrite(STATUS_LED, LOW);
-    delay(5000);
+    
+    // Clignoter rapidement la LED pour indiquer l'échec
+    blinkStatusLED(10, 250);
+    
     ESP.restart();
   }
   
-  // Connexion réussie
+  // Connexion réussie - réinitialiser le compteur d'échecs
+  preferences.putInt("wifiFailCount", 0);
+  blinkStatusLED(3, 100);  // Signal de succès
   Serial.println("\n✓✓✓ WiFi CONNECTED ✓✓✓");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
@@ -219,6 +245,7 @@ void setup() {
   if (strlen(config.mqttServer) > 0) {
     Serial.println("MQTT configuration found, enabling MQTT.");
     mqttEnabled = true;
+    blinkStatusLED(2, 100);  // Signal MQTT activé
   }
 
   // === DÉMARRAGE TÂCHE I/O ===
@@ -235,6 +262,7 @@ void setup() {
   server.begin();
   Serial.println("Web server started and configured.");
   Serial.println("========================================");
+  blinkStatusLED(1, 500);  // Signal de démarrage complet
 }
 
 
