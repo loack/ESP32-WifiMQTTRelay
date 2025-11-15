@@ -18,14 +18,11 @@ static uint32_t lastSyncSeconds = 0;
 static uint32_t lastSyncMicros = 0;  // micros() au moment de la sync
 static uint32_t timeOffsetUs = 0;    // Offset en microsecondes
 
-// Statistiques de synchronisation
+// Statistiques de synchronisation (simplifiées - juste pour affichage)
 struct SyncStats {
     uint32_t sync_count = 0;
-    int32_t last_drift_us = 0;
-    float avg_drift_us = 0.0;  // CORRIGÉ: en microsecondes, pas millisecondes
-    uint32_t estimated_latency_us = 0;
+    uint32_t estimated_latency_us = 0;  // Compensation reçue du PC
     uint32_t last_sync_timestamp = 0;
-    uint32_t max_abs_drift_us = 0;  // Dérive max observée
 } syncStats;
 
 // Obtenir le temps actuel avec précision microseconde
@@ -99,9 +96,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     // Handle time synchronization first, as it's a critical service
     // Le topic de temps est commun à tous les appareils
     if (topicStr.equals("esp32/time/sync")) {
-        // Capturer immédiatement le temps de réception
-        uint64_t rx_time_us = getCurrentTimeMicros();
-        
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, payload, length);
         
@@ -109,74 +103,51 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
             uint32_t master_sec = doc["seconds"];
             uint32_t master_us = doc["us"] | 0;
             
+            // Lire la compensation pour NOTRE device (si disponible)
+            if (doc["compensations"].is<JsonObject>()) {
+                JsonObject compensations = doc["compensations"];
+                String deviceName = String(config.deviceName);
+                
+                // Utiliser la méthode moderne is<T>() au lieu de containsKey (deprecated)
+                if (compensations[deviceName].is<uint32_t>()) {
+                    syncStats.estimated_latency_us = compensations[deviceName];
+                }
+            }
+            
             // Calculer le temps maître en microsecondes
             uint64_t master_time_us = (uint64_t)master_sec * 1000000ULL + master_us;
             
-            // Mesurer la dérive AVANT la synchronisation
-            int64_t drift_us = (int64_t)master_time_us - (int64_t)rx_time_us;
-            
-            // Compenser avec la latence estimée (si disponible)
+            // Appliquer la compensation (si disponible)
             if (syncStats.estimated_latency_us > 0) {
                 master_time_us += syncStats.estimated_latency_us;
-                master_sec = master_time_us / 1000000ULL;
-                master_us = master_time_us % 1000000ULL;
             }
             
-            // Appliquer la synchronisation
+            // Synchroniser l'horloge
             struct timeval tv;
-            tv.tv_sec = master_sec;
-            tv.tv_usec = master_us;
+            tv.tv_sec = master_time_us / 1000000ULL;
+            tv.tv_usec = master_time_us % 1000000ULL;
             settimeofday(&tv, NULL);
             
             // Mettre à jour les statistiques
-            syncStats.last_drift_us = drift_us;
             syncStats.sync_count++;
+            syncStats.last_sync_timestamp = master_sec;
+            lastSyncSeconds = master_sec;
+            lastSyncMicros = micros();
             
-            // Ignorer les 2 premières syncs (horloge non initialisée)
+            // Affichage simplifié
             if (syncStats.sync_count <= 2) {
-                Serial.printf("⏰ Time sync #%u: %u.%06u (initializing, drift ignored)\n", 
-                             syncStats.sync_count, master_sec, master_us);
+                Serial.printf("⏰ Time sync #%u: %u.%06u (initializing)\n", 
+                             syncStats.sync_count, tv.tv_sec, tv.tv_usec);
             } else {
-                // Moyenne mobile exponentielle de la dérive (en microsecondes)
-                if (syncStats.sync_count == 3) {
-                    // Première vraie mesure
-                    syncStats.avg_drift_us = (float)drift_us;
-                } else {
-                    // Alpha plus élevé pour converger plus vite
-                    syncStats.avg_drift_us = (syncStats.avg_drift_us * 0.7f) + ((float)drift_us * 0.3f);
-                }
-                
-                // Tracker la dérive max
-                uint32_t abs_drift = abs(drift_us);
-                if (abs_drift > syncStats.max_abs_drift_us) {
-                    syncStats.max_abs_drift_us = abs_drift;
-                }
-                
-                // Afficher les statistiques de synchronisation
-                Serial.printf("⏰ Time sync #%u: %u.%06u\n", 
-                             syncStats.sync_count, master_sec, master_us);
-                Serial.printf("   └─ Drift: %+.2f ms | Avg: %+.2f ms | Max: %+.2f ms", 
-                             drift_us / 1000.0f, 
-                             syncStats.avg_drift_us / 1000.0f,
-                             syncStats.max_abs_drift_us / 1000.0f);
+                Serial.printf("⏰ Time sync #%u: %u.%06u", 
+                             syncStats.sync_count, tv.tv_sec, tv.tv_usec);
                 
                 if (syncStats.estimated_latency_us > 0) {
-                    float rtt_ms = (syncStats.estimated_latency_us * 2.0f) / 1000.0f;
-                    Serial.printf(" | RTT: ±%.2f ms | Comp: +%.2f ms", 
-                                 rtt_ms,
+                    Serial.printf(" | Comp: +%.2f ms", 
                                  syncStats.estimated_latency_us / 1000.0f);
                 }
                 Serial.println();
             }
-            
-            // Reset des stats tous les 100 syncs pour éviter l'accumulation
-            if (syncStats.sync_count % 100 == 0) {
-                syncStats.max_abs_drift_us = 0;
-            }
-            
-            syncStats.last_sync_timestamp = master_sec;
-            lastSyncSeconds = master_sec;
-            lastSyncMicros = micros();
             
         } else {
             // Ancienne méthode (compatibilité)
@@ -192,33 +163,19 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         return;
     }
     
-    // Nouveau: Topic pour mesurer la latence réseau (ping/pong)
+    // Topic pour mesurer la latence réseau (ping/pong) - géré par le PC
     if (topicStr.equals(String(config.deviceName) + "/ping")) {
         // Répondre immédiatement avec pong
         char pongTopic[128];
         snprintf(pongTopic, sizeof(pongTopic), "%s/pong", config.deviceName);
         
-        // Renvoyer le payload reçu + notre timestamp
+        // Renvoyer le payload reçu pour que le PC puisse mesurer le RTT
         JsonDocument pongDoc;
         pongDoc["ping_payload"] = String(message);
-        pongDoc["pong_time_us"] = (uint32_t)(getCurrentTimeMicros() % 1000000000ULL);
         
         char pongPayload[128];
         serializeJson(pongDoc, pongPayload);
         publishMQTT(pongTopic, pongPayload);
-        return;
-    }
-    
-    // Topic pour recevoir l'estimation de latence du PC
-    if (topicStr.equals(String(config.deviceName) + "/latency")) {
-        JsonDocument doc;
-        if (deserializeJson(doc, payload, length) == DeserializationError::Ok) {
-            if (doc["estimated_latency_us"].is<uint32_t>()) {
-                syncStats.estimated_latency_us = doc["estimated_latency_us"];
-                Serial.printf("📡 Network latency updated: %.2f ms\n", 
-                             syncStats.estimated_latency_us / 1000.0f);
-            }
-        }
         return;
     }
 
@@ -315,15 +272,10 @@ void reconnectMQTT() {
     mqttClient.subscribe("esp32/time/sync");
     Serial.printf("✓ Abonné à: esp32/time/sync\n");
     
-    // Subscribe to ping topic for latency measurement
+    // Subscribe to ping topic for latency measurement (géré par le PC)
     String pingTopic = String(config.deviceName) + "/ping";
     mqttClient.subscribe(pingTopic.c_str());
     Serial.printf("✓ Abonné à: %s\n", pingTopic.c_str());
-    
-    // Subscribe to latency estimation topic
-    String latencyTopic = String(config.deviceName) + "/latency";
-    mqttClient.subscribe(latencyTopic.c_str());
-    Serial.printf("✓ Abonné à: %s\n", latencyTopic.c_str());
     
     Serial.println("========================================");
     Serial.println();

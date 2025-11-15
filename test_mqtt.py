@@ -89,29 +89,30 @@ def on_message(client, userdata, msg):
     # Gérer les réponses pong pour mesurer la latence
     if topic.endswith("/pong"):
         try:
+            # Extraire le nom du device depuis le topic
+            device_name = topic.split('/')[0]
             data = json.loads(payload)
             ping_payload = data.get("ping_payload")
             
-            if ping_payload and ping_payload in latency_tracker['ping_times']:
-                ping_time = latency_tracker['ping_times'].pop(ping_payload)
+            if ping_payload and ping_payload in ping_tracker['ping_times']:
+                ping_time, tracked_device = ping_tracker['ping_times'].pop(ping_payload)
+                if device_name != tracked_device:
+                    return  # Réponse d'un autre device
+                    
                 rtt = (receipt_time - ping_time) * 1000000  # en microsecondes
                 
+                # Obtenir le tracker pour ce device
+                dev_latency = get_device_latency(device_name)
+                
                 # Ajouter à l'échantillon
-                latency_tracker['samples'].append(rtt)
-                if len(latency_tracker['samples']) > latency_tracker['max_samples']:
-                    latency_tracker['samples'].pop(0)
+                dev_latency['samples'].append(rtt)
+                if len(dev_latency['samples']) > MAX_SAMPLES:
+                    dev_latency['samples'].pop(0)
                 
                 # Calculer le RTT moyen et la latence (unidirectionnelle = RTT / 2)
-                avg_rtt = sum(latency_tracker['samples']) / len(latency_tracker['samples'])
-                latency_tracker['avg_rtt_us'] = int(avg_rtt)
-                latency_tracker['avg_latency_us'] = int(avg_rtt / 2)
-                
-                # Envoyer la latence unidirectionnelle à l'ESP32
-                latency_topic = f"{DEVICE_NAME}/latency"
-                latency_payload = json.dumps({
-                    "estimated_latency_us": latency_tracker['avg_latency_us']
-                })
-                client.publish(latency_topic, latency_payload)
+                avg_rtt = sum(dev_latency['samples']) / len(dev_latency['samples'])
+                dev_latency['avg_rtt_us'] = int(avg_rtt)
+                dev_latency['avg_latency_us'] = int(avg_rtt / 2)
                 
                 # Afficher le RTT individuel (pas la moyenne) pour voir les vraies valeurs
                 rtt_ms = rtt / 1000.0
@@ -120,7 +121,7 @@ def on_message(client, userdata, msg):
                 # N'afficher que pendant les tests de qualité (sinon trop verbeux)
                 # Les pings automatiques toutes les 30s sont silencieux
                 if ping_payload.startswith("measure_"):
-                    print(f"    ✓ RTT: {rtt_ms:.2f}ms | Latence: {latency_ms:.2f}ms")
+                    print(f"    ✓ [{device_name}] RTT: {rtt_ms:.2f}ms | Latence: {latency_ms:.2f}ms")
         except (json.JSONDecodeError, KeyError):
             pass
         return
@@ -328,17 +329,20 @@ def measure_sync_quality(client):
         print("⚠ Client MQTT non connecté")
         return
     
-    print("\n🔬 Mesure de la qualité de synchronisation...")
+    print(f"\n🔬 Mesure de la qualité de synchronisation pour [{DEVICE_NAME}]...")
     print("Envoi de 10 pings espacés pour mesurer la latence réseau...\n")
     
+    # Obtenir le tracker pour ce device
+    dev_latency = get_device_latency(DEVICE_NAME)
+    
     # Nettoyer les anciens échantillons pour une mesure propre
-    old_samples = latency_tracker['samples'].copy()
-    latency_tracker['samples'].clear()
+    old_samples = dev_latency['samples'].copy()
+    dev_latency['samples'].clear()
     
     # Envoyer 10 pings avec espacement suffisant
     for i in range(10):
         ping_id = f"measure_{int(time.time() * 1000000)}_{i}"
-        latency_tracker['ping_times'][ping_id] = time.time()
+        ping_tracker['ping_times'][ping_id] = (time.time(), DEVICE_NAME)
         client.publish(f"{DEVICE_NAME}/ping", ping_id)
         print(f"  Ping {i+1}/10...", end='', flush=True)
         time.sleep(0.3)  # 300ms entre chaque ping pour éviter la congestion
@@ -349,8 +353,8 @@ def measure_sync_quality(client):
     time.sleep(1.5)
     
     # Analyser les résultats
-    if len(latency_tracker['samples']) > 0:
-        rtts_ms = [rtt / 1000.0 for rtt in latency_tracker['samples']]
+    if len(dev_latency['samples']) > 0:
+        rtts_ms = [rtt / 1000.0 for rtt in dev_latency['samples']]
         
         # Trier pour calculer les percentiles
         rtts_sorted = sorted(rtts_ms)
@@ -423,13 +427,13 @@ def measure_sync_quality(client):
         print(f"{'='*55}\n")
         
         # Restaurer les échantillons (combiner ancien et nouveau pour moyenne mobile)
-        latency_tracker['samples'] = old_samples + latency_tracker['samples']
-        if len(latency_tracker['samples']) > latency_tracker['max_samples']:
-            latency_tracker['samples'] = latency_tracker['samples'][-latency_tracker['max_samples']:]
+        dev_latency['samples'] = old_samples + dev_latency['samples']
+        if len(dev_latency['samples']) > MAX_SAMPLES:
+            dev_latency['samples'] = dev_latency['samples'][-MAX_SAMPLES:]
     else:
         print("\n❌ Aucune réponse reçue. Vérifiez la connexion MQTT.")
         # Restaurer les anciens échantillons
-        latency_tracker['samples'] = old_samples
+        dev_latency['samples'] = old_samples
 
 def publish_time(client):
     """Publie le timestamp actuel avec précision microseconde et mesure la latence"""
@@ -437,25 +441,35 @@ def publish_time(client):
         if client.is_connected():
             current_loop_time = time.time()
             
-            # Mesurer la latence toutes les 30 secondes
-            if current_loop_time - latency_tracker['last_measurement'] > 30:
-                # Envoyer un ping pour mesurer la latence
-                ping_id = str(int(current_loop_time * 1000000))
-                latency_tracker['ping_times'][ping_id] = current_loop_time
-                ping_topic = f"{DEVICE_NAME}/ping"
-                client.publish(ping_topic, ping_id)
-                latency_tracker['last_measurement'] = current_loop_time
+            # Mesurer la latence toutes les 30 secondes pour chaque device connu
+            for device_name in list(device_latencies.keys()):
+                dev_latency = device_latencies[device_name]
+                if current_loop_time - dev_latency['last_measurement'] > 30:
+                    # Envoyer un ping pour mesurer la latence
+                    ping_id = f"{device_name}_{int(current_loop_time * 1000000)}"
+                    ping_tracker['ping_times'][ping_id] = (current_loop_time, device_name)
+                    ping_topic = f"{device_name}/ping"
+                    client.publish(ping_topic, ping_id)
+                    dev_latency['last_measurement'] = current_loop_time
             
             # Obtenir le temps avec microsecondes
             current_time = time.time()
             seconds = int(current_time)
             microseconds = int((current_time - seconds) * 1000000)
             
-            # Créer le payload JSON avec microsecondes
-            payload = json.dumps({
+            # Créer le payload JSON avec microsecondes + compensations par device
+            payload_data = {
                 "seconds": seconds,
-                "us": microseconds
-            })
+                "us": microseconds,
+                "compensations": {}  # device_name -> latency_us
+            }
+            
+            # Ajouter la compensation pour chaque device
+            for device_name, dev_latency in device_latencies.items():
+                if dev_latency['avg_latency_us'] > 0:
+                    payload_data["compensations"][device_name] = dev_latency['avg_latency_us']
+            
+            payload = json.dumps(payload_data)
             
             topic = "esp32/time/sync"  # Topic commun à tous les ESP32
             client.publish(topic, payload, qos=1)  # QoS 1 pour garantir la livraison
@@ -463,10 +477,16 @@ def publish_time(client):
             time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(seconds))
             
             # Afficher avec info de latence si disponible
-            if latency_tracker['avg_rtt_us'] > 0:
-                print(f"⏰ Sync: {seconds}.{microseconds:06d} | Incertitude: ±{latency_tracker['avg_rtt_us']/1000:.2f}ms (RTT) | Compensation: {latency_tracker['avg_latency_us']/1000:.2f}ms")
+            if device_latencies:
+                compensations_str = ", ".join([f"{dev}:{lat['avg_latency_us']/1000:.1f}ms" 
+                                               for dev, lat in device_latencies.items() 
+                                               if lat['avg_latency_us'] > 0])
+                if compensations_str:
+                    print(f"⏰ Sync: {seconds}.{microseconds:06d} | Compensations: [{compensations_str}]")
+                else:
+                    print(f"⏰ Sync: {seconds}.{microseconds:06d} (mesure latence en cours...)")
             else:
-                print(f"⏰ Sync: {seconds}.{microseconds:06d} (mesure latence en cours...)")
+                print(f"⏰ Sync: {seconds}.{microseconds:06d} (aucun device détecté)")
         
         time.sleep(10)  # Synchroniser toutes les 10 secondes
 
