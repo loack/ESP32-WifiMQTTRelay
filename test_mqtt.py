@@ -19,6 +19,9 @@ DEVICE_NAME = "lilygo"  # Nom de l'appareil ESP32 (doit correspondre au nom conf
 RELAY_NAMES = ["RelaisK1", "RelaisK2","RelaisK3","RelaisK4"]
 RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 
+# Liste des devices pour les tests multi-ESP32
+ALL_DEVICES = ["laser", "lilygo"]  # Ajouter vos ESP32 ici
+
 # Dictionnaire pour suivre les commandes en attente de confirmation
 pending_commands = {}
 
@@ -261,6 +264,75 @@ def toggle_relay(client, relay_name, delay=2):
     time.sleep(delay)
     turn_off(client, relay_name)
 
+def synchronized_toggle_all_devices(client, relay_name="RelaisK1", delay_seconds=3):
+    """Active un relais sur TOUS les ESP32 de manière synchronisée"""
+    print(f"\n🎬 TEST DE SYNCHRONISATION MULTI-ESP32")
+    print(f"{'='*60}")
+    print(f"Relais ciblé: {relay_name}")
+    print(f"Devices: {', '.join(ALL_DEVICES)}")
+    print(f"Délai avant exécution: {delay_seconds} secondes")
+    print(f"{'='*60}\n")
+    
+    # Vérifier que tous les devices ont une compensation mesurée
+    devices_ready = []
+    for device in ALL_DEVICES:
+        if device in device_latencies and device_latencies[device]['avg_latency_us'] > 0:
+            devices_ready.append(device)
+            comp_ms = device_latencies[device]['avg_latency_us'] / 1000.0
+            print(f"  ✓ {device:12s} - Compensation: {comp_ms:6.2f} ms")
+        else:
+            print(f"  ⚠️  {device:12s} - Pas de compensation disponible (mesure en cours...)")
+    
+    if len(devices_ready) < len(ALL_DEVICES):
+        print(f"\n⚠️  Attendez que tous les devices aient une compensation mesurée")
+        print(f"   ({len(devices_ready)}/{len(ALL_DEVICES)} prêts)")
+        return
+    
+    # Calculer l'heure d'exécution synchronisée
+    current_time = time.time()
+    exec_time = current_time + delay_seconds
+    exec_seconds = int(exec_time)
+    exec_us = int((exec_time - exec_seconds) * 1000000)
+    
+    exec_time_str = time.strftime('%H:%M:%S', time.localtime(exec_seconds))
+    print(f"\n⏰ Heure d'exécution synchronisée: {exec_time_str}.{exec_us:06d}")
+    print(f"\n📤 Envoi des commandes programmées...\n")
+    
+    # Envoyer la commande à tous les devices
+    for device in ALL_DEVICES:
+        topic = f"{device}/control/{relay_name}/set"
+        payload_data = {
+            "state": 1,  # ON
+            "exec_at": exec_seconds,
+            "exec_at_us": exec_us
+        }
+        payload = json.dumps(payload_data)
+        
+        result = client.publish(topic, payload, qos=1)
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            print(f"  ✓ Commande envoyée à {device}")
+        else:
+            print(f"  ✗ Échec d'envoi à {device}")
+    
+    print(f"\n⏳ Attente de l'exécution ({delay_seconds}s)...")
+    print(f"🎥 FILMEZ MAINTENANT pour vérifier la synchronisation !\n")
+    
+    # Attendre l'exécution + marge
+    time.sleep(delay_seconds + 2)
+    
+    # Éteindre tous les relais
+    print(f"\n📤 Extinction des relais...\n")
+    for device in ALL_DEVICES:
+        topic = f"{device}/control/{relay_name}/set"
+        payload_data = {"state": 0}  # OFF
+        payload = json.dumps(payload_data)
+        client.publish(topic, payload, qos=1)
+        print(f"  ✓ {device} éteint")
+    
+    print(f"\n{'='*60}")
+    print(f"✓ Test de synchronisation terminé")
+    print(f"{'='*60}\n")
+
 # ========== MENU INTERACTIF ==========
 def show_menu():
     """Affiche le menu des commandes"""
@@ -276,7 +348,9 @@ def show_menu():
     print(f"{offset+2}. Test séquentiel")
     print(f"{offset+3}. Activer {RELAY_NAMES[0]} dans 5 secondes")
     print(f"{offset+4}. Publier timestamp maintenant")
-    print(f"{offset+5}. Mesurer la qualité de synchronisation")
+    print(f"{offset+5}. Mesurer la compensation réseau")
+    print(f"{offset+6}. 🎬 TEST SYNC MULTI-ESP32 (laser + lilygo)")
+    print(f"{offset+7}. 🔄 Changer de device")
     print("0. Quitter")
     print("="*50)
 
@@ -323,13 +397,13 @@ def publish_time_now(client):
     else:
         print("⚠ Client MQTT non connecté")
 
-def measure_sync_quality(client):
-    """Mesure la qualité de synchronisation en envoyant plusieurs pings"""
+def measure_compensation(client):
+    """Mesure la compensation réseau en envoyant plusieurs pings"""
     if not client.is_connected():
         print("⚠ Client MQTT non connecté")
         return
     
-    print(f"\n🔬 Mesure de la qualité de synchronisation pour [{DEVICE_NAME}]...")
+    print(f"\n🔬 Mesure de la compensation réseau pour [{DEVICE_NAME}]...")
     print("Envoi de 10 pings espacés pour mesurer la latence réseau...\n")
     
     # Obtenir le tracker pour ce device
@@ -434,6 +508,41 @@ def measure_sync_quality(client):
         print("\n❌ Aucune réponse reçue. Vérifiez la connexion MQTT.")
         # Restaurer les anciens échantillons
         dev_latency['samples'] = old_samples
+
+def switch_device(client):
+    """Permet de changer le device actuellement contrôlé"""
+    global DEVICE_NAME
+    
+    print(f"\n{'='*60}")
+    print("CHANGEMENT DE DEVICE")
+    print(f"{'='*60}")
+    print(f"Device actuel: {DEVICE_NAME}")
+    print(f"Devices disponibles: {', '.join(ALL_DEVICES)}")
+    
+    new_device = input("\nNom du nouveau device: ").strip()
+    
+    if not new_device:
+        print("❌ Nom vide, annulation")
+        return
+    
+    old_device = DEVICE_NAME
+    DEVICE_NAME = new_device
+    
+    # Se désabonner des anciens topics
+    client.unsubscribe(f"{old_device}/status/#")
+    client.unsubscribe(f"{old_device}/availability")
+    client.unsubscribe(f"{old_device}/pong")
+    
+    # S'abonner aux nouveaux topics
+    client.subscribe(f"{DEVICE_NAME}/status/#")
+    client.subscribe(f"{DEVICE_NAME}/availability")
+    client.subscribe(f"{DEVICE_NAME}/pong")
+    
+    print(f"\n✓ Device changé: {old_device} → {DEVICE_NAME}")
+    print(f"✓ Abonné aux nouveaux topics de {DEVICE_NAME}")
+    
+    # Initialiser le tracker de latence pour ce device si nécessaire
+    get_device_latency(DEVICE_NAME)
 
 def publish_time(client):
     """Publie le timestamp actuel avec précision microseconde et mesure la latence"""
@@ -643,9 +752,17 @@ def main():
                 elif choice == num_relays*2 + 4:
                     publish_time_now(client)
                 
-                # Mesurer la qualité de synchronisation
+                # Mesurer la compensation réseau
                 elif choice == num_relays*2 + 5:
-                    measure_sync_quality(client)
+                    measure_compensation(client)
+                
+                # Test de synchronisation multi-ESP32
+                elif choice == num_relays*2 + 6:
+                    synchronized_toggle_all_devices(client)
+                
+                # Changer de device
+                elif choice == num_relays*2 + 7:
+                    switch_device(client)
                 
                 else:
                     print("❌ Option invalide")
