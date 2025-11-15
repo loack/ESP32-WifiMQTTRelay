@@ -17,6 +17,7 @@ import json
 MQTT_PORT = 1883
 DEVICE_NAME = "lilygo"  # Nom de l'appareil ESP32 (doit correspondre au nom configuré sur l'ESP32)
 RELAY_NAMES = ["RelaisK1", "RelaisK2","RelaisK3","RelaisK4"]
+RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 
 # Dictionnaire pour suivre les commandes en attente de confirmation
 pending_commands = {}
@@ -72,13 +73,14 @@ def on_message(client, userdata, msg):
             if isinstance(data, dict):
                 state = data.get("state")
                 esp_timestamp = data.get("timestamp")
+                esp_us = data.get("us", 0)  # Microsecondes (0 par défaut)
 
                 if state is None or esp_timestamp is None:
                     print(f"📨 Message de statut incomplet reçu pour {relay_name}: {payload}")
                     return
 
                 state_str = "ON" if state == 1 else "OFF"
-                print(f"📨 Statut reçu pour {relay_name}: {state_str} (ESP time: {esp_timestamp})")
+                print(f"📨 Statut reçu pour {relay_name}: {state_str} (ESP time: {esp_timestamp}.{esp_us:06d})")
 
                 # Vérifier si une commande était en attente pour ce relais
                 if relay_name in pending_commands:
@@ -87,16 +89,22 @@ def on_message(client, userdata, msg):
                     if command_info['type'] == 'immediate':
                         send_time = command_info['time']
                         latency = (receipt_time - send_time) * 1000
-                        print(f"   └── ⏱️  Latence de la commande immédiate: {latency:.2f} ms")
+                        print(f"   └── ⏱️  Latence de la commande immédiate: {latency:.3f} ms")
                     
                     elif command_info['type'] == 'scheduled':
-                        exec_at = command_info['exec_at']
-                        delay = (esp_timestamp - exec_at) * 1000
+                        exec_at_sec = command_info['exec_at_sec']
+                        exec_at_us = command_info['exec_at_us']
+                        
+                        # Calculer le délai en microsecondes
+                        expected_time_us = (exec_at_sec * 1000000) + exec_at_us
+                        actual_time_us = (esp_timestamp * 1000000) + esp_us
+                        delay_us = actual_time_us - expected_time_us
+                        delay_ms = delay_us / 1000.0
                         
                         print(f"   └── 🗓️  Commande programmée exécutée:")
-                        print(f"        - Heure demandée : {exec_at}")
-                        print(f"        - Heure exécution: {esp_timestamp}")
-                        print(f"        - Décalage         : {delay:.2f} ms")
+                        print(f"        - Heure demandée : {exec_at_sec}.{exec_at_us:06d}")
+                        print(f"        - Heure exécution: {esp_timestamp}.{esp_us:06d}")
+                        print(f"        - Décalage       : {delay_ms:.3f} ms ({delay_us} µs)")
             
             # Si c'est juste un nombre (inputs)
             elif isinstance(data, int):
@@ -122,19 +130,24 @@ def on_publish(client, userdata, mid, reason_code=None, properties=None):
     pass  # Silencieux pour ne pas polluer la console
 
 # ========== FONCTIONS DE CONTRÔLE ==========
-def set_relay(client, relay_name, state, exec_at=None):
+def set_relay(client, relay_name, state, exec_at_sec=None, exec_at_us=None):
     """Active ou désactive un relais, immédiatement ou de manière programmée"""
     topic = f"{DEVICE_NAME}/control/{relay_name}/set"
     
     payload_data = {"state": 1 if state else 0}
-    if exec_at:
-        payload_data["exec_at"] = exec_at
+    if exec_at_sec is not None:
+        payload_data["exec_at"] = exec_at_sec
+        payload_data["exec_at_us"] = exec_at_us if exec_at_us is not None else 0
     
     payload = json.dumps(payload_data)
     
     # Enregistrer les informations sur la commande pour le calcul de la latence/délai
-    if exec_at:
-        pending_commands[relay_name] = {'type': 'scheduled', 'exec_at': exec_at}
+    if exec_at_sec is not None:
+        pending_commands[relay_name] = {
+            'type': 'scheduled', 
+            'exec_at_sec': exec_at_sec,
+            'exec_at_us': exec_at_us if exec_at_us is not None else 0
+        }
     else:
         pending_commands[relay_name] = {'type': 'immediate', 'time': time.time()}
 
@@ -142,9 +155,10 @@ def set_relay(client, relay_name, state, exec_at=None):
     
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         action = "ON" if state else "OFF"
-        if exec_at:
-            exec_time_str = time.strftime('%H:%M:%S', time.localtime(exec_at))
-            print(f"✓ Commande programmée envoyée: {relay_name} -> {action} à {exec_time_str}")
+        if exec_at_sec is not None:
+            exec_time_str = time.strftime('%H:%M:%S', time.localtime(exec_at_sec))
+            exec_us = exec_at_us if exec_at_us is not None else 0
+            print(f"✓ Commande programmée envoyée: {relay_name} -> {action} à {exec_time_str}.{exec_us:06d}")
         else:
             print(f"✓ Commande immédiate envoyée: {relay_name} -> {action}")
     else:
@@ -161,10 +175,18 @@ def turn_off(client, relay_name):
     set_relay(client, relay_name, False)
 
 def schedule_toggle(client, relay_name, delay_seconds=5):
-    """Programme l'activation d'un relais dans le futur"""
+    """Programme l'activation d'un relais dans le futur avec précision microseconde"""
+    current_time = time.time()
+    exec_time = current_time + delay_seconds
+    
+    exec_seconds = int(exec_time)
+    exec_us = int((exec_time - exec_seconds) * 1000000)
+    
     print(f"\n🗓️ Programmation de {relay_name} pour s'activer dans {delay_seconds} secondes...")
-    exec_time = int(time.time() + delay_seconds)
-    set_relay(client, relay_name, True, exec_at=exec_time)
+    exec_time_str = time.strftime('%H:%M:%S', time.localtime(exec_seconds))
+    print(f"   Exécution prévue: {exec_time_str}.{exec_us:06d}")
+    
+    set_relay(client, relay_name, True, exec_at_sec=exec_seconds, exec_at_us=exec_us)
 
 
 def toggle_relay(client, relay_name, delay=2):
@@ -216,26 +238,47 @@ def toggle_all(client):
         time.sleep(0.2)
 
 def publish_time_now(client):
-    """Publie le timestamp immédiatement (appel manuel)"""
+    """Publie le timestamp immédiatement avec précision microseconde"""
     if client.is_connected():
-        timestamp = int(time.time())
+        current_time = time.time()
+        seconds = int(current_time)
+        microseconds = int((current_time - seconds) * 1000000)
+        
+        payload = json.dumps({
+            "seconds": seconds,
+            "us": microseconds
+        })
+        
         topic = "esp32/time/sync"
-        client.publish(topic, str(timestamp), qos=0)
-        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
-        print(f"\u23f0 Timestamp publié manuellement: {timestamp} ({time_str})")
+        client.publish(topic, payload, qos=1)
+        
+        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(seconds))
+        print(f"\u23f0 Timestamp publié manuellement: {seconds}.{microseconds:06d} ({time_str}.{microseconds:06d})")
     else:
         print("⚠ Client MQTT non connecté")
 
 def publish_time(client):
-    """Publie le timestamp actuel sur le topic de synchronisation"""
+    """Publie le timestamp actuel avec précision microseconde"""
     while True:
         if client.is_connected():
-            timestamp = int(time.time())
+            # Obtenir le temps avec microsecondes
+            current_time = time.time()
+            seconds = int(current_time)
+            microseconds = int((current_time - seconds) * 1000000)
+            
+            # Créer le payload JSON avec microsecondes
+            payload = json.dumps({
+                "seconds": seconds,
+                "us": microseconds
+            })
+            
             topic = "esp32/time/sync"  # Topic commun à tous les ESP32
-            client.publish(topic, str(timestamp), qos=0)
-            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
-            print(f"\u23f0 Timestamp publié: {timestamp} ({time_str})")
-        time.sleep(60) # Publie toutes les 60 secondes
+            client.publish(topic, payload, qos=1)  # QoS 1 pour garantir la livraison
+            
+            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(seconds))
+            print(f"\u23f0 Timestamp publié: {seconds}.{microseconds:06d} ({time_str}.{microseconds:06d})")
+        
+        time.sleep(10)  # Synchroniser toutes les 10 secondes
 
 def restart_mosquitto():
     """Redémarre le service Mosquitto pour s'assurer qu'il est bien lancé."""
@@ -291,6 +334,8 @@ def check_and_restart_mosquitto(host, port):
 # ========== PROGRAMME PRINCIPAL ========== 
 def main():
     """Fonction principale"""
+    global DEVICE_NAME
+    
     print("="*60)
     print("ESP32 IO Controller - Script de Test MQTT")
     print("="*60)
@@ -301,6 +346,17 @@ def main():
     check_and_restart_mosquitto(local_ip, MQTT_PORT)
 
     print(f"\n✅ L'adresse IP de ce PC est: {local_ip}")
+    
+    # Demander le nom du device à contrôler
+    print("\n" + "="*60)
+    print("SÉLECTION DE L'APPAREIL")
+    print("="*60)
+    device_input = input(f"Nom de l'appareil ESP32 (par défaut: '{DEVICE_NAME}'): ").strip()
+    if device_input:
+        DEVICE_NAME = device_input
+        print(f"✓ Appareil sélectionné: {DEVICE_NAME}")
+    else:
+        print(f"✓ Utilisation de l'appareil par défaut: {DEVICE_NAME}")
     
     print("\n" + "="*60)
     print("📋 CONFIGURATION REQUISE POUR L'ESP32")

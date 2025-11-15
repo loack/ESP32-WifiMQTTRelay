@@ -32,10 +32,11 @@ struct AccessLog {
 #define MAX_SCHEDULED_COMMANDS 10
 
 struct ScheduledCommand {
+  bool active;
   int pin;
   int state;
-  unsigned long exec_at; // Unix timestamp for execution
-  bool active;
+  uint32_t exec_at_sec;  // Unix timestamp en secondes
+  uint32_t exec_at_us;   // Microsecondes (0-999999)
 };
 
 

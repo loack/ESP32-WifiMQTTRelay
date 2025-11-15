@@ -18,6 +18,9 @@ extern bool mqttEnabled;
 // Fonction pour faire clignoter la LED (définie dans main.cpp)
 void blinkStatusLED(int times, int delayMs);
 
+// Fonction pour obtenir le temps avec précision microseconde
+uint64_t getCurrentTimeMicros();
+
 // MQTT API
 void setupMQTT();
 void reconnectMQTT();

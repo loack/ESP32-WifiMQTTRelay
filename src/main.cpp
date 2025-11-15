@@ -298,13 +298,32 @@ void loop() {
 }
 
 void processScheduledCommands() {
-  time_t now;
-  time(&now);
+  // Obtenir le temps actuel avec précision microseconde
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  uint64_t currentTimeUs = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+  
   for (int i = 0; i < MAX_SCHEDULED_COMMANDS; i++) {
-    if (scheduledCommands[i].active && now >= scheduledCommands[i].exec_at) {
-      Serial.printf("Executing scheduled command for pin %d\n", scheduledCommands[i].pin);
-      executeCommand(scheduledCommands[i].pin, scheduledCommands[i].state);
-      scheduledCommands[i].active = false; // Deactivate after execution
+    if (scheduledCommands[i].active) {
+      // Calculer le temps d'exécution prévu en microsecondes
+      uint64_t execTimeUs = ((uint64_t)scheduledCommands[i].exec_at_sec * 1000000ULL) + 
+                             (uint64_t)scheduledCommands[i].exec_at_us;
+      
+      // Vérifier si le moment d'exécution est arrivé
+      if (currentTimeUs >= execTimeUs) {
+        // Calculer le délai d'exécution (peut être négatif si en avance)
+        int64_t delay_us = (int64_t)currentTimeUs - (int64_t)execTimeUs;
+        
+        // Exécuter la commande
+        executeCommand(scheduledCommands[i].pin, scheduledCommands[i].state);
+        
+        // Désactiver cette commande
+        scheduledCommands[i].active = false;
+        
+        // Afficher le délai en millisecondes avec 3 décimales
+        double delay_ms = delay_us / 1000.0;
+        Serial.printf("⏰ Scheduled command executed (delay: %.3f ms)\n", delay_ms);
+      }
     }
   }
 }

@@ -3,6 +3,7 @@
 #include "mqtt.h"
 #include <ArduinoJson.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include <WiFi.h>
 
@@ -11,6 +12,18 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 // MQTT active flag (default disabled so web server can be debugged first)
 bool mqttEnabled = false;
+
+// Variables pour synchronisation temporelle précise
+static uint32_t lastSyncSeconds = 0;
+static uint32_t lastSyncMicros = 0;  // micros() au moment de la sync
+static uint32_t timeOffsetUs = 0;    // Offset en microsecondes
+
+// Obtenir le temps actuel avec précision microseconde
+uint64_t getCurrentTimeMicros() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+}
 
 // MQTT callback and helpers moved out of main.cpp
 
@@ -43,11 +56,17 @@ void executeCommand(int pin, int state) {
   if(pinIndex != -1) {
     snprintf(topic, sizeof(topic), "%s/status/%s", config.deviceName, ioPins[pinIndex].name);
     
+    // Obtenir le temps avec précision microseconde
+    uint64_t timeUs = getCurrentTimeMicros();
+    uint32_t seconds = timeUs / 1000000ULL;
+    uint32_t us = timeUs % 1000000ULL;
+    
     JsonDocument doc;
     doc["state"] = state;
-    doc["timestamp"] = time(nullptr);
+    doc["timestamp"] = seconds;
+    doc["us"] = us;  // Microsecondes
     
-    char payload[64];
+    char payload[128];
     serializeJson(doc, payload);
 
     if (mqttEnabled && mqttClient.connected()) {
@@ -70,13 +89,34 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     // Handle time synchronization first, as it's a critical service
     // Le topic de temps est commun à tous les appareils
     if (topicStr.equals("esp32/time/sync")) {
-        unsigned long unix_time = atol(message);
-        if (unix_time > 1000000000) { // Basic validation of timestamp
-            timeval tv;
-            tv.tv_sec = unix_time;
-            tv.tv_usec = 0;
-            settimeofday(&tv, nullptr);
-            Serial.printf("Time synchronized from MQTT: %lu\n", unix_time);
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload, length);
+        
+        if (!error && doc["seconds"].is<uint32_t>()) {
+            // Format JSON avec microsecondes: {"seconds": 1234567890, "us": 123456}
+            uint32_t seconds = doc["seconds"];
+            uint32_t us = doc["us"] | 0;  // Default to 0 if not present
+            
+            // Synchroniser l'horloge système avec précision microseconde
+            struct timeval tv;
+            tv.tv_sec = seconds;
+            tv.tv_usec = us;
+            settimeofday(&tv, NULL);
+            
+            lastSyncSeconds = seconds;
+            lastSyncMicros = micros();
+            
+            Serial.printf("⏰ Time synchronized: %u.%06u (us precision)\n", seconds, us);
+        } else {
+            // Ancienne méthode (compatibilité - secondes seulement)
+            unsigned long unix_time = atol(message);
+            if (unix_time > 1000000000) {
+                struct timeval tv;
+                tv.tv_sec = unix_time;
+                tv.tv_usec = 0;
+                settimeofday(&tv, NULL);
+                Serial.printf("Time synchronized from MQTT: %lu\n", unix_time);
+            }
         }
         return; // Message handled
     }
@@ -107,24 +147,26 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
                 }
 
                 int state = doc["state"];
-                unsigned long exec_at = doc["exec_at"];
+                uint32_t exec_at_sec = doc["exec_at"] | 0;
+                uint32_t exec_at_us = doc["exec_at_us"] | 0;
 
-                if (exec_at > 0) {
-                    // Schedule command
+                if (exec_at_sec > 0) {
+                    // Schedule command avec précision microseconde
                     bool scheduled = false;
                     for (int j = 0; j < MAX_SCHEDULED_COMMANDS; j++) {
                         if (!scheduledCommands[j].active) {
                             scheduledCommands[j].pin = ioPins[i].pin;
                             scheduledCommands[j].state = state;
-                            scheduledCommands[j].exec_at = exec_at;
+                            scheduledCommands[j].exec_at_sec = exec_at_sec;
+                            scheduledCommands[j].exec_at_us = exec_at_us;
                             scheduledCommands[j].active = true;
                             scheduled = true;
-                            Serial.printf("Command for pin %d scheduled at %lu\n", ioPins[i].pin, exec_at);
+                            Serial.printf("⏰ Command for pin %d scheduled at %u.%06u\n", ioPins[i].pin, exec_at_sec, exec_at_us);
                             break;
                         }
                     }
                     if (!scheduled) {
-                        Serial.println("Scheduled command queue is full!");
+                        Serial.println("⚠️ Scheduled command queue is full!");
                     }
                 } else {
                     // Execute immediately
