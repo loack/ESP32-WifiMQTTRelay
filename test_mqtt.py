@@ -65,34 +65,43 @@ def on_message(client, userdata, msg):
     if topic.startswith(status_prefix):
         relay_name = topic[len(status_prefix):]
         try:
+            # Essayer de parser comme JSON d'abord
             data = json.loads(payload)
-            state = data.get("state")
-            esp_timestamp = data.get("timestamp")
+            
+            # Si c'est un objet JSON avec state et timestamp (outputs/relais)
+            if isinstance(data, dict):
+                state = data.get("state")
+                esp_timestamp = data.get("timestamp")
 
-            if state is None or esp_timestamp is None:
-                print(f"📨 Message de statut incomplet reçu pour {relay_name}: {payload}")
-                return
+                if state is None or esp_timestamp is None:
+                    print(f"📨 Message de statut incomplet reçu pour {relay_name}: {payload}")
+                    return
 
-            state_str = "ON" if state == 1 else "OFF"
-            print(f"📨 Statut reçu pour {relay_name}: {state_str} (ESP time: {esp_timestamp})")
+                state_str = "ON" if state == 1 else "OFF"
+                print(f"📨 Statut reçu pour {relay_name}: {state_str} (ESP time: {esp_timestamp})")
 
-            # Vérifier si une commande était en attente pour ce relais
-            if relay_name in pending_commands:
-                command_info = pending_commands.pop(relay_name)
-                
-                if command_info['type'] == 'immediate':
-                    send_time = command_info['time']
-                    latency = (receipt_time - send_time) * 1000
-                    print(f"   └── ⏱️  Latence de la commande immédiate: {latency:.2f} ms")
-                
-                elif command_info['type'] == 'scheduled':
-                    exec_at = command_info['exec_at']
-                    delay = (esp_timestamp - exec_at) * 1000
+                # Vérifier si une commande était en attente pour ce relais
+                if relay_name in pending_commands:
+                    command_info = pending_commands.pop(relay_name)
                     
-                    print(f"   └── 🗓️  Commande programmée exécutée:")
-                    print(f"        - Heure demandée : {exec_at}")
-                    print(f"        - Heure exécution: {esp_timestamp}")
-                    print(f"        - Décalage         : {delay:.2f} ms")
+                    if command_info['type'] == 'immediate':
+                        send_time = command_info['time']
+                        latency = (receipt_time - send_time) * 1000
+                        print(f"   └── ⏱️  Latence de la commande immédiate: {latency:.2f} ms")
+                    
+                    elif command_info['type'] == 'scheduled':
+                        exec_at = command_info['exec_at']
+                        delay = (esp_timestamp - exec_at) * 1000
+                        
+                        print(f"   └── 🗓️  Commande programmée exécutée:")
+                        print(f"        - Heure demandée : {exec_at}")
+                        print(f"        - Heure exécution: {esp_timestamp}")
+                        print(f"        - Décalage         : {delay:.2f} ms")
+            
+            # Si c'est juste un nombre (inputs)
+            elif isinstance(data, int):
+                state_str = "HIGH" if data == 1 else "LOW"
+                print(f"📨 Input {relay_name}: {state_str}")
 
         except (json.JSONDecodeError, KeyError):
             # Gérer les anciens messages ou les messages mal formés

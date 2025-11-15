@@ -23,6 +23,9 @@
         .badge { padding: 5px 12px; border-radius: 15px; font-size: 13px; font-weight: bold; color: white; }
         .badge-success { background: var(--success-color); }
         .badge-danger { background: var(--error-color); }
+        .status-indicator { display: inline-block; width: 20px; height: 20px; border-radius: 50%; margin-left: 10px; }
+        .status-inactive { background-color: #95a5a6; }
+        .status-active { background-color: var(--success-color); box-shadow: 0 0 10px rgba(46, 204, 113, 0.5); }
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; margin-bottom: 8px; font-weight: bold; }
         .form-group input, .form-group select { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; }
@@ -182,7 +185,9 @@
 
             if (inputs.length > 0) {
                 inputs.forEach(io => {
-                    inputsDiv.innerHTML += `<div class="card io-item"><span>${io.name} (GPIO ${io.pin})</span><span>${io.state ? 'HAUT' : 'BAS'}</span></div>`;
+                    const statusClass = io.state ? 'status-active' : 'status-inactive';
+                    const statusText = io.state ? 'HAUT' : 'BAS';
+                    inputsDiv.innerHTML += `<div class="card io-item"><span>${io.name} (GPIO ${io.pin})</span><span>${statusText}<span class="status-indicator ${statusClass}"></span></span></div>`;
                 });
             } else {
                 inputsDiv.innerHTML = '<p>Aucune entrée configurée.</p>';
