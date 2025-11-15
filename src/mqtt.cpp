@@ -22,6 +22,40 @@ String getFormattedTime() {
   return String(timeStr);
 }
 
+void executeCommand(int pin, int state) {
+  digitalWrite(pin, state);
+  for (int i = 0; i < ioPinCount; i++) {
+    if (ioPins[i].pin == pin) {
+      ioPins[i].state = state;
+      break;
+    }
+  }
+
+  // Publish status
+  char topic[128];
+  int pinIndex = -1;
+  for(int i=0; i<ioPinCount; i++) {
+    if(ioPins[i].pin == pin) {
+      pinIndex = i;
+      break;
+    }
+  }
+  if(pinIndex != -1) {
+    snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[pinIndex].name);
+    
+    JsonDocument doc;
+    doc["state"] = state;
+    doc["timestamp"] = time(nullptr);
+    
+    char payload[64];
+    serializeJson(doc, payload);
+
+    if (mqttEnabled && mqttClient.connected()) {
+      publishMQTT(topic, payload);
+    }
+  }
+}
+
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     String topicStr = String(topic);
     String baseTopic = String(config.mqttTopic);
@@ -60,27 +94,42 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     for (int i = 0; i < ioPinCount; i++) {
         if (String(ioPins[i].name) == pinName) {
             if (ioPins[i].mode == 2) { // OUTPUT
-                bool newState = (strcmp(message, "1") == 0 || strcasecmp(message, "ON") == 0 || strcasecmp(message, "true") == 0);
-                
-                digitalWrite(ioPins[i].pin, newState);
-                ioPins[i].state = newState;
-                
-                // Get execution timestamp
-                time_t exec_time = time(nullptr);
-
-                Serial.printf("Output '%s' (pin %d) set to %s\n", ioPins[i].name, ioPins[i].pin, newState ? "HIGH" : "LOW");
-
-                // Publish the new state to the status topic as a JSON object
                 JsonDocument doc;
-                doc["state"] = newState ? "ON" : "OFF";
-                doc["timestamp"] = exec_time;
+                DeserializationError error = deserializeJson(doc, payload, length);
 
-                char jsonBuffer[128];
-                serializeJson(doc, jsonBuffer);
+                if (error) {
+                    Serial.print(F("deserializeJson() failed: "));
+                    Serial.println(error.c_str());
+                    // Fallback for simple "0" or "1" commands
+                    int state = atoi(message);
+                    executeCommand(ioPins[i].pin, state);
+                    return;
+                }
 
-                char statusTopic[128];
-                snprintf(statusTopic, sizeof(statusTopic), "status/%s", ioPins[i].name);
-                publishMQTT(statusTopic, jsonBuffer, true); // Publish as retained
+                int state = doc["state"];
+                unsigned long exec_at = doc["exec_at"];
+
+                if (exec_at > 0) {
+                    // Schedule command
+                    bool scheduled = false;
+                    for (int j = 0; j < MAX_SCHEDULED_COMMANDS; j++) {
+                        if (!scheduledCommands[j].active) {
+                            scheduledCommands[j].pin = ioPins[i].pin;
+                            scheduledCommands[j].state = state;
+                            scheduledCommands[j].exec_at = exec_at;
+                            scheduledCommands[j].active = true;
+                            scheduled = true;
+                            Serial.printf("Command for pin %d scheduled at %lu\n", ioPins[i].pin, exec_at);
+                            break;
+                        }
+                    }
+                    if (!scheduled) {
+                        Serial.println("Scheduled command queue is full!");
+                    }
+                } else {
+                    // Execute immediately
+                    executeCommand(ioPins[i].pin, state);
+                }
 
             } else {
                 Serial.printf("Received command for non-output pin '%s'\n", pinName.c_str());

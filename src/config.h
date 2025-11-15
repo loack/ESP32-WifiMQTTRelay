@@ -22,10 +22,19 @@ struct IOPin {
 
 
 struct AccessLog {
-  unsigned long timestamp;
-  uint32_t code;
-  bool granted;
-  uint8_t type;
+  char timestamp[25];
+  char ip[16];
+  char resource[50];
+};
+
+// Maximum number of scheduled commands
+#define MAX_SCHEDULED_COMMANDS 10
+
+struct ScheduledCommand {
+  int pin;
+  int state;
+  unsigned long exec_at; // Unix timestamp for execution
+  bool active;
 };
 
 

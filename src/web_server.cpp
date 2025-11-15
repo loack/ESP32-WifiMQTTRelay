@@ -66,20 +66,7 @@ void setupWebServer() {
       for (int i = 0; i < ioPinCount; i++) {
         if (strcmp(ioPins[i].name, ioName) == 0) {
           if (ioPins[i].mode == 2) { // OUTPUT
-            digitalWrite(ioPins[i].pin, state);
-            ioPins[i].state = state;
-            
-            char topic[128];
-            snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[i].name);
-            
-            JsonDocument statusDoc;
-            statusDoc["state"] = state ? "ON" : "OFF";
-            statusDoc["timestamp"] = time(nullptr);
-            String payload;
-            serializeJson(statusDoc, payload);
-
-            if (mqttEnabled) publishMQTT(topic, payload.c_str(), true);
-            
+            executeCommand(ioPins[i].pin, state);
             request->send(200, "application/json", "{\"success\":true, \"message\":\"IO mis à jour\"}");
           } else {
             request->send(400, "application/json", "{\"success\":false, \"message\":\"Cet IO n'est pas une sortie\"}");

@@ -52,7 +52,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 def on_message(client, userdata, msg):
     """Appelé lors de la réception d'un message"""
-    current_time = time.time()
+    receipt_time = time.time()
     topic = msg.topic
     payload = msg.payload.decode()
 
@@ -62,20 +62,37 @@ def on_message(client, userdata, msg):
         relay_name = topic[len(status_prefix):]
         try:
             data = json.loads(payload)
-            state = data.get("state", "N/A")
-            esp_timestamp = data.get("timestamp", 0)
-            
-            print(f"📨 Statut reçu pour {relay_name}: {state} (depuis ESP @{esp_timestamp})")
+            state = data.get("state")
+            esp_timestamp = data.get("timestamp")
 
-            # Calculer la latence si une commande était en attente
+            if state is None or esp_timestamp is None:
+                print(f"📨 Message de statut incomplet reçu pour {relay_name}: {payload}")
+                return
+
+            state_str = "ON" if state == 1 else "OFF"
+            print(f"📨 Statut reçu pour {relay_name}: {state_str} (ESP time: {esp_timestamp})")
+
+            # Vérifier si une commande était en attente pour ce relais
             if relay_name in pending_commands:
-                send_time = pending_commands.pop(relay_name)
-                latency = (current_time - send_time) * 1000
-                print(f"   └── ⏱️  Latence de la commande: {latency:.2f} ms")
+                command_info = pending_commands.pop(relay_name)
+                
+                if command_info['type'] == 'immediate':
+                    send_time = command_info['time']
+                    latency = (receipt_time - send_time) * 1000
+                    print(f"   └── ⏱️  Latence de la commande immédiate: {latency:.2f} ms")
+                
+                elif command_info['type'] == 'scheduled':
+                    exec_at = command_info['exec_at']
+                    delay = (esp_timestamp - exec_at) * 1000
+                    
+                    print(f"   └── 🗓️  Commande programmée exécutée:")
+                    print(f"        - Heure demandée : {exec_at}")
+                    print(f"        - Heure exécution: {esp_timestamp}")
+                    print(f"        - Décalage         : {delay:.2f} ms")
 
-        except json.JSONDecodeError:
-            # Gérer les anciens messages non-JSON pour la compatibilité
-            print(f"📨 Message (non-JSON) reçu: {topic} = {payload}")
+        except (json.JSONDecodeError, KeyError):
+            # Gérer les anciens messages ou les messages mal formés
+            print(f"📨 Message (non-JSON ou mal formé) reçu: {topic} = {payload}")
 
     # Gérer les autres messages (disponibilité, etc.)
     else:
@@ -92,30 +109,50 @@ def on_publish(client, userdata, mid, reason_code=None, properties=None):
     pass  # Silencieux pour ne pas polluer la console
 
 # ========== FONCTIONS DE CONTRÔLE ==========
-def set_relay(client, relay_name, state):
-    """Active ou désactive un relais"""
+def set_relay(client, relay_name, state, exec_at=None):
+    """Active ou désactive un relais, immédiatement ou de manière programmée"""
     topic = f"{MQTT_BASE_TOPIC}/control/{relay_name}/set"
-    payload = "1" if state else "0"
     
-    # Enregistrer le temps d'envoi pour calculer la latence
-    pending_commands[relay_name] = time.time()
+    payload_data = {"state": 1 if state else 0}
+    if exec_at:
+        payload_data["exec_at"] = exec_at
     
+    payload = json.dumps(payload_data)
+    
+    # Enregistrer les informations sur la commande pour le calcul de la latence/délai
+    if exec_at:
+        pending_commands[relay_name] = {'type': 'scheduled', 'exec_at': exec_at}
+    else:
+        pending_commands[relay_name] = {'type': 'immediate', 'time': time.time()}
+
     result = client.publish(topic, payload, qos=1)
+    
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
         action = "ON" if state else "OFF"
-        print(f"✓ Commande envoyée: {relay_name} -> {action}")
+        if exec_at:
+            exec_time_str = time.strftime('%H:%M:%S', time.localtime(exec_at))
+            print(f"✓ Commande programmée envoyée: {relay_name} -> {action} à {exec_time_str}")
+        else:
+            print(f"✓ Commande immédiate envoyée: {relay_name} -> {action}")
     else:
         print(f"✗ Erreur lors de l'envoi de la commande")
         # Si l'envoi échoue, retirer la commande des commandes en attente
         pending_commands.pop(relay_name, None)
 
 def turn_on(client, relay_name):
-    """Active un relais"""
+    """Active un relais immédiatement"""
     set_relay(client, relay_name, True)
 
 def turn_off(client, relay_name):
-    """Désactive un relais"""
+    """Désactive un relais immédiatement"""
     set_relay(client, relay_name, False)
+
+def schedule_toggle(client, relay_name, delay_seconds=5):
+    """Programme l'activation d'un relais dans le futur"""
+    print(f"\n🗓️ Programmation de {relay_name} pour s'activer dans {delay_seconds} secondes...")
+    exec_time = int(time.time() + delay_seconds)
+    set_relay(client, relay_name, True, exec_at=exec_time)
+
 
 def toggle_relay(client, relay_name, delay=2):
     """Fait basculer un relais ON puis OFF avec un délai"""
@@ -137,6 +174,7 @@ def show_menu():
     offset = len(RELAY_NAMES) * 2
     print(f"{offset+1}. Toggle tous les relais")
     print(f"{offset+2}. Test séquentiel")
+    print(f"{offset+3}. Activer {RELAY_NAMES[0]} dans 5 secondes")
     print("0. Quitter")
     print("="*50)
 
@@ -304,6 +342,10 @@ def main():
                 # Test séquentiel
                 elif choice == num_relays*2 + 2:
                     test_sequence(client)
+
+                # Commande programmée
+                elif choice == num_relays*2 + 3:
+                    schedule_toggle(client, RELAY_NAMES[0], delay_seconds=5)
                 
                 else:
                     print("❌ Option invalide")

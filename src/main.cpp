@@ -8,6 +8,7 @@
 #include <Preferences.h>
 #include <WiFiUdp.h>
 #include <SPIFFS.h>
+#include <time.h>
 
 #include "config.h"
 #include "mqtt.h"
@@ -22,6 +23,8 @@ Config config;
 IOPin ioPins[MAX_IOS];
 AccessLog accessLogs[100];   // Max 100 logs
 int ioPinCount = 0;
+
+ScheduledCommand scheduledCommands[MAX_SCHEDULED_COMMANDS];
 
 unsigned long lastMqttReconnect = 0;
 
@@ -38,7 +41,7 @@ void applyIOPinModes();
 void handleIOs(void *pvParameters); // Modified for FreeRTOS
 void setupWebServer();
 void blinkStatusLED(int times, int delayMs);
-
+void processScheduledCommands();
 
 // ===== FreeRTOS Task Handles =====
 TaskHandle_t ioTaskHandle = NULL;
@@ -88,6 +91,11 @@ bool checkTriplePress() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  // Initialize scheduled commands queue
+  for (int i = 0; i < MAX_SCHEDULED_COMMANDS; i++) {
+    scheduledCommands[i].active = false;
+  }
 
   Serial.println("\n\n=== ESP32 Generic IO Controller ===");
   Serial.println("Version 1.0");
@@ -235,6 +243,8 @@ void loop() {
   // The main loop is now responsible for high-frequency tasks only.
   // I/O handling is moved to a separate FreeRTOS task.
 
+  processScheduledCommands();
+
   if (WiFi.status() == WL_CONNECTED) {
     if (mqttEnabled) {
       if (!mqttClient.connected()) {
@@ -257,6 +267,18 @@ void loop() {
   // but it should be as small as possible (e.g., 1ms) or removed entirely
   // if other tasks yield frequently enough.
   delay(1);
+}
+
+void processScheduledCommands() {
+  time_t now;
+  time(&now);
+  for (int i = 0; i < MAX_SCHEDULED_COMMANDS; i++) {
+    if (scheduledCommands[i].active && now >= scheduledCommands[i].exec_at) {
+      Serial.printf("Executing scheduled command for pin %d\n", scheduledCommands[i].pin);
+      executeCommand(scheduledCommands[i].pin, scheduledCommands[i].state);
+      scheduledCommands[i].active = false; // Deactivate after execution
+    }
+  }
 }
 
 // ===== CONFIGURATION FUNCTIONS =====
