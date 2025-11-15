@@ -396,32 +396,19 @@ void applyIOPinModes() {
 // ===== I/O HANDLING (FreeRTOS Task) =====
 void handleIOs(void *pvParameters) {
   Serial.println("✅ I/O handling task started.");
-  struct DebounceInfo {
-    bool lastState;
-    unsigned long lastChangeTime;
-  };
-  DebounceInfo debounce[MAX_IOS];
-  for(int i=0; i<MAX_IOS; i++) {
-    debounce[i] = {HIGH, 0};
-  }
 
   for (;;) { // Infinite loop for the task
-    unsigned long now = millis();
     for (int i = 0; i < ioPinCount; i++) {
       if (ioPins[i].mode == 1) { // INPUT
         bool currentState = digitalRead(ioPins[i].pin);
-        if (currentState != debounce[i].lastState) {
-          debounce[i].lastChangeTime = now;
-        }
-        debounce[i].lastState = currentState;
 
-        // After 50ms of stability, if the state is different from the stored state, it's a confirmed change.
-        if ((now - debounce[i].lastChangeTime > 50) && (currentState != ioPins[i].state)) {
+        // Détection immédiate du changement d'état (sans debounce)
+        if (currentState != ioPins[i].state) {
           ioPins[i].state = currentState;
           Serial.printf("Input '%s' (pin %d) changed to %s\n", ioPins[i].name, ioPins[i].pin, currentState ? "HIGH" : "LOW");
           
           char topic[128];
-          snprintf(topic, sizeof(topic), "%s/status/%s", config.mqttTopic, ioPins[i].name);
+          snprintf(topic, sizeof(topic), "%s/status/%s", config.deviceName, ioPins[i].name);
           char payload[2];
           snprintf(payload, sizeof(payload), "%d", currentState ? 1 : 0);
 
@@ -431,7 +418,7 @@ void handleIOs(void *pvParameters) {
         }
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(20)); // Check inputs every 20ms
+    vTaskDelay(pdMS_TO_TICKS(1)); // Check inputs every 1ms (réactivité maximale)
   }
 }
 

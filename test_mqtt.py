@@ -15,8 +15,8 @@ import json
 
 # ========== CONFIGURATION ========== 
 MQTT_PORT = 1883
-DEVICE_NAME = "laser"  # Nom de l'appareil ESP32 (doit correspondre au nom configuré sur l'ESP32)
-RELAY_NAMES = ["RelaisK1", "RelaisK2"]
+DEVICE_NAME = "lilygo"  # Nom de l'appareil ESP32 (doit correspondre au nom configuré sur l'ESP32)
+RELAY_NAMES = ["RelaisK1", "RelaisK2","RelaisK3","RelaisK4"]
 
 # Dictionnaire pour suivre les commandes en attente de confirmation
 pending_commands = {}
@@ -179,6 +179,7 @@ def show_menu():
     print(f"{offset+1}. Toggle tous les relais")
     print(f"{offset+2}. Test séquentiel")
     print(f"{offset+3}. Activer {RELAY_NAMES[0]} dans 5 secondes")
+    print(f"{offset+4}. Publier timestamp maintenant")
     print("0. Quitter")
     print("="*50)
 
@@ -205,6 +206,17 @@ def toggle_all(client):
         turn_off(client, relay)
         time.sleep(0.2)
 
+def publish_time_now(client):
+    """Publie le timestamp immédiatement (appel manuel)"""
+    if client.is_connected():
+        timestamp = int(time.time())
+        topic = "esp32/time/sync"
+        client.publish(topic, str(timestamp), qos=0)
+        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+        print(f"\u23f0 Timestamp publié manuellement: {timestamp} ({time_str})")
+    else:
+        print("⚠ Client MQTT non connecté")
+
 def publish_time(client):
     """Publie le timestamp actuel sur le topic de synchronisation"""
     while True:
@@ -212,7 +224,8 @@ def publish_time(client):
             timestamp = int(time.time())
             topic = "esp32/time/sync"  # Topic commun à tous les ESP32
             client.publish(topic, str(timestamp), qos=0)
-            # print(f"-> Time published: {timestamp}") # Décommenter pour debug
+            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+            print(f"\u23f0 Timestamp publié: {timestamp} ({time_str})")
         time.sleep(60) # Publie toutes les 60 secondes
 
 def restart_mosquitto():
@@ -350,6 +363,10 @@ def main():
                 # Commande programmée
                 elif choice == num_relays*2 + 3:
                     schedule_toggle(client, RELAY_NAMES[0], delay_seconds=5)
+                
+                # Publier timestamp maintenant
+                elif choice == num_relays*2 + 4:
+                    publish_time_now(client)
                 
                 else:
                     print("❌ Option invalide")
