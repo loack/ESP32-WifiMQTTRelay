@@ -164,6 +164,13 @@ void setup() {
   Serial.println("\n✓✓✓ WiFi CONNECTED ✓✓✓");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+  
+  // === OPTIMISATION LATENCE ===
+  // Désactiver le mode économie d'énergie du WiFi pour réduire la latence du ping
+  WiFi.setSleep(false);
+  Serial.println("✓ WiFi power-saving mode disabled to reduce latency.");
+  // ==========================
+
   Serial.print("Gateway: ");
   Serial.println(WiFi.gatewayIP());
   Serial.print("RSSI: ");
@@ -205,6 +212,17 @@ void setup() {
     Serial.println("MQTT configuration found, enabling MQTT.");
     mqttEnabled = true;
   }
+
+  // === DÉMARRAGE TÂCHE I/O ===
+  // Crée la tâche pour gérer les I/O sur le coeur 0, avec une haute priorité
+  xTaskCreatePinnedToCore(
+      handleIOs,        // Fonction de la tâche
+      "IOTask",         // Nom de la tâche
+      4096,             // Taille de la pile
+      NULL,             // Paramètres de la tâche
+      1,                // Priorité
+      &ioTaskHandle,    // Handle de la tâche
+      0);               // Cœur 0
 
   server.begin();
   Serial.println("Web server started and configured.");
