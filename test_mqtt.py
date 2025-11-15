@@ -22,14 +22,25 @@ RELAY_NAMES = ["RelaisK1", "RelaisK2"]
 # Dictionnaire pour suivre les commandes en attente de confirmation
 pending_commands = {}
 
-# Mesure de latence réseau
-latency_tracker = {
-    'samples': [],
-    'max_samples': 20,
-    'last_measurement': 0,
-    'avg_latency_us': 0,
-    'ping_times': {}
+# Mesure de latence réseau - PAR DEVICE
+device_latencies = {}  # device_name -> {'samples': [], 'avg_rtt_us': 0, 'avg_latency_us': 0, 'last_measurement': 0}
+MAX_SAMPLES = 20
+
+# Tracker global des pings en attente
+ping_tracker = {
+    'ping_times': {}  # ping_id -> (time, device_name)
 }
+
+def get_device_latency(device_name):
+    """Obtenir ou créer le tracker de latence pour un device"""
+    if device_name not in device_latencies:
+        device_latencies[device_name] = {
+            'samples': [],
+            'avg_rtt_us': 0,
+            'avg_latency_us': 0,
+            'last_measurement': 0
+        }
+    return device_latencies[device_name]
 
 def get_local_ip():
     """Récupère l'adresse IP locale"""
@@ -90,18 +101,26 @@ def on_message(client, userdata, msg):
                 if len(latency_tracker['samples']) > latency_tracker['max_samples']:
                     latency_tracker['samples'].pop(0)
                 
-                # Calculer la latence moyenne (unidirectionnelle = RTT / 2)
+                # Calculer le RTT moyen et la latence (unidirectionnelle = RTT / 2)
                 avg_rtt = sum(latency_tracker['samples']) / len(latency_tracker['samples'])
+                latency_tracker['avg_rtt_us'] = int(avg_rtt)
                 latency_tracker['avg_latency_us'] = int(avg_rtt / 2)
                 
-                # Envoyer la latence estimée à l'ESP32
+                # Envoyer la latence unidirectionnelle à l'ESP32
                 latency_topic = f"{DEVICE_NAME}/latency"
                 latency_payload = json.dumps({
                     "estimated_latency_us": latency_tracker['avg_latency_us']
                 })
                 client.publish(latency_topic, latency_payload)
                 
-                print(f"📡 RTT: {rtt/1000:.2f}ms | Latence estimée: {latency_tracker['avg_latency_us']/1000:.2f}ms")
+                # Afficher le RTT individuel (pas la moyenne) pour voir les vraies valeurs
+                rtt_ms = rtt / 1000.0
+                latency_ms = rtt_ms / 2.0
+                
+                # N'afficher que pendant les tests de qualité (sinon trop verbeux)
+                # Les pings automatiques toutes les 30s sont silencieux
+                if ping_payload.startswith("measure_"):
+                    print(f"    ✓ RTT: {rtt_ms:.2f}ms | Latence: {latency_ms:.2f}ms")
         except (json.JSONDecodeError, KeyError):
             pass
         return
@@ -310,51 +329,103 @@ def measure_sync_quality(client):
         return
     
     print("\n🔬 Mesure de la qualité de synchronisation...")
-    print("Envoi de 10 pings pour mesurer la latence réseau...\n")
+    print("Envoi de 10 pings espacés pour mesurer la latence réseau...\n")
     
-    # Nettoyer les anciens échantillons
+    # Nettoyer les anciens échantillons pour une mesure propre
     old_samples = latency_tracker['samples'].copy()
     latency_tracker['samples'].clear()
     
-    # Envoyer 10 pings rapides
+    # Envoyer 10 pings avec espacement suffisant
     for i in range(10):
         ping_id = f"measure_{int(time.time() * 1000000)}_{i}"
         latency_tracker['ping_times'][ping_id] = time.time()
         client.publish(f"{DEVICE_NAME}/ping", ping_id)
-        time.sleep(0.05)  # 50ms entre chaque ping
+        print(f"  Ping {i+1}/10...", end='', flush=True)
+        time.sleep(0.3)  # 300ms entre chaque ping pour éviter la congestion
+        # La réponse s'affichera sur la même ligne grâce au callback
     
-    # Attendre les réponses
-    print("Attente des réponses...")
-    time.sleep(2)
+    # Attendre les dernières réponses
+    print("\n\nAttente des dernières réponses...")
+    time.sleep(1.5)
     
     # Analyser les résultats
     if len(latency_tracker['samples']) > 0:
         rtts_ms = [rtt / 1000.0 for rtt in latency_tracker['samples']]
-        avg_rtt = sum(rtts_ms) / len(rtts_ms)
-        min_rtt = min(rtts_ms)
-        max_rtt = max(rtts_ms)
+        
+        # Trier pour calculer les percentiles
+        rtts_sorted = sorted(rtts_ms)
+        n = len(rtts_sorted)
+        median_rtt = rtts_sorted[n//2]
+        p25_rtt = rtts_sorted[n//4]
+        p75_rtt = rtts_sorted[(3*n)//4]
+        
+        # Filtrer les outliers (> 3x la médiane)
+        rtts_filtered = [rtt for rtt in rtts_ms if rtt < median_rtt * 3]
+        
+        if len(rtts_filtered) == 0:
+            rtts_filtered = rtts_ms  # Fallback si tous filtrés
+        
+        avg_rtt = sum(rtts_filtered) / len(rtts_filtered)
+        min_rtt = min(rtts_filtered)
+        max_rtt = max(rtts_filtered)
         jitter = max_rtt - min_rtt
         latency_ms = avg_rtt / 2
         
-        print(f"\n📊 Résultats ({len(rtts_ms)} échantillons):")
-        print(f"  RTT moyen:    {avg_rtt:.3f} ms")
-        print(f"  RTT min:      {min_rtt:.3f} ms")
-        print(f"  RTT max:      {max_rtt:.3f} ms")
-        print(f"  Jitter:       {jitter:.3f} ms")
-        print(f"  Latence est.: {latency_ms:.3f} ms")
+        # Calculer l'écart-type pour voir la stabilité
+        variance = sum((rtt - avg_rtt)**2 for rtt in rtts_filtered) / len(rtts_filtered)
+        std_dev = variance ** 0.5
         
-        print(f"\n🎯 Précision de synchronisation estimée: ±{latency_ms:.2f} ms")
+        print(f"\n{'='*55}")
+        print(f"📊 RÉSULTATS DE MESURE ({len(rtts_filtered)}/{len(rtts_ms)} échantillons)")
+        print(f"{'='*55}")
+        print(f"  RTT moyen:         {avg_rtt:.2f} ms")
+        print(f"  RTT médiane:       {median_rtt:.2f} ms")
+        print(f"  RTT min/max:       {min_rtt:.2f} / {max_rtt:.2f} ms")
+        print(f"  Percentile 25/75:  {p25_rtt:.2f} / {p75_rtt:.2f} ms")
+        print(f"  Jitter (max-min):  {jitter:.2f} ms")
+        print(f"  Écart-type:        {std_dev:.2f} ms")
+        print(f"  Latence unidirect: {latency_ms:.2f} ms")
         
-        if latency_ms < 2:
-            print("  ✅ Excellente qualité - précision sub-milliseconde possible")
-        elif latency_ms < 5:
-            print("  ✅ Très bonne qualité - précision de quelques millisecondes")
-        elif latency_ms < 10:
-            print("  ✓ Bonne qualité - précision ~10ms")
-        elif latency_ms < 20:
-            print("  ⚠️  Qualité moyenne - précision ~20ms")
+        if len(rtts_filtered) < len(rtts_ms):
+            outliers = len(rtts_ms) - len(rtts_filtered)
+            outlier_values = [rtt for rtt in rtts_ms if rtt >= median_rtt * 3]
+            print(f"\n  ⚠️  {outliers} outlier(s) ignoré(s): {', '.join(f'{v:.1f}ms' for v in outlier_values)}")
+        
+        print(f"\n🎯 Incertitude de synchronisation: ±{avg_rtt:.1f} ms")
+        print(f"{'='*55}")
+        
+        # Évaluation basée sur le RTT complet, pas la latence
+        if avg_rtt < 5:
+            quality = "✅ EXCELLENTE"
+            desc = "Précision sub-5ms - idéal pour synchronisation temps réel"
+        elif avg_rtt < 15:
+            quality = "✅ TRÈS BONNE"
+            desc = "Précision ~15ms - bon pour la plupart des applications"
+        elif avg_rtt < 30:
+            quality = "✓ BONNE"
+            desc = "Précision ~30ms - acceptable"
+        elif avg_rtt < 50:
+            quality = "⚠️  MOYENNE"
+            desc = "Précision ~50ms - vérifier la qualité WiFi"
         else:
-            print("  ❌ Faible qualité - vérifier le réseau")
+            quality = "❌ FAIBLE"
+            desc = "Précision >50ms - problème réseau probable"
+        
+        print(f"  {quality}")
+        print(f"  {desc}")
+        
+        # Avertissement si jitter ou écart-type élevé
+        if std_dev > avg_rtt * 0.4:
+            print(f"  ⚠️  Écart-type élevé ({std_dev:.1f}ms) - réseau instable")
+        elif jitter > avg_rtt * 0.6:
+            print(f"  ⚠️  Jitter élevé ({jitter:.1f}ms) - latence variable")
+        
+        print(f"{'='*55}\n")
+        
+        # Restaurer les échantillons (combiner ancien et nouveau pour moyenne mobile)
+        latency_tracker['samples'] = old_samples + latency_tracker['samples']
+        if len(latency_tracker['samples']) > latency_tracker['max_samples']:
+            latency_tracker['samples'] = latency_tracker['samples'][-latency_tracker['max_samples']:]
     else:
         print("\n❌ Aucune réponse reçue. Vérifiez la connexion MQTT.")
         # Restaurer les anciens échantillons
@@ -392,8 +463,8 @@ def publish_time(client):
             time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(seconds))
             
             # Afficher avec info de latence si disponible
-            if latency_tracker['avg_latency_us'] > 0:
-                print(f"⏰ Sync: {seconds}.{microseconds:06d} | Latence: ±{latency_tracker['avg_latency_us']/1000:.2f}ms")
+            if latency_tracker['avg_rtt_us'] > 0:
+                print(f"⏰ Sync: {seconds}.{microseconds:06d} | Incertitude: ±{latency_tracker['avg_rtt_us']/1000:.2f}ms (RTT) | Compensation: {latency_tracker['avg_latency_us']/1000:.2f}ms")
             else:
                 print(f"⏰ Sync: {seconds}.{microseconds:06d} (mesure latence en cours...)")
         

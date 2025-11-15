@@ -22,9 +22,10 @@ static uint32_t timeOffsetUs = 0;    // Offset en microsecondes
 struct SyncStats {
     uint32_t sync_count = 0;
     int32_t last_drift_us = 0;
-    float avg_drift_ms = 0.0;
+    float avg_drift_us = 0.0;  // CORRIGÉ: en microsecondes, pas millisecondes
     uint32_t estimated_latency_us = 0;
     uint32_t last_sync_timestamp = 0;
+    uint32_t max_abs_drift_us = 0;  // Dérive max observée
 } syncStats;
 
 // Obtenir le temps actuel avec précision microseconde
@@ -131,29 +132,51 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
             syncStats.last_drift_us = drift_us;
             syncStats.sync_count++;
             
-            // Moyenne mobile exponentielle de la dérive
-            float drift_ms = drift_us / 1000.0f;
-            if (syncStats.sync_count == 1) {
-                syncStats.avg_drift_ms = drift_ms;
+            // Ignorer les 2 premières syncs (horloge non initialisée)
+            if (syncStats.sync_count <= 2) {
+                Serial.printf("⏰ Time sync #%u: %u.%06u (initializing, drift ignored)\n", 
+                             syncStats.sync_count, master_sec, master_us);
             } else {
-                syncStats.avg_drift_ms = (syncStats.avg_drift_ms * 0.8f) + (drift_ms * 0.2f);
+                // Moyenne mobile exponentielle de la dérive (en microsecondes)
+                if (syncStats.sync_count == 3) {
+                    // Première vraie mesure
+                    syncStats.avg_drift_us = (float)drift_us;
+                } else {
+                    // Alpha plus élevé pour converger plus vite
+                    syncStats.avg_drift_us = (syncStats.avg_drift_us * 0.7f) + ((float)drift_us * 0.3f);
+                }
+                
+                // Tracker la dérive max
+                uint32_t abs_drift = abs(drift_us);
+                if (abs_drift > syncStats.max_abs_drift_us) {
+                    syncStats.max_abs_drift_us = abs_drift;
+                }
+                
+                // Afficher les statistiques de synchronisation
+                Serial.printf("⏰ Time sync #%u: %u.%06u\n", 
+                             syncStats.sync_count, master_sec, master_us);
+                Serial.printf("   └─ Drift: %+.2f ms | Avg: %+.2f ms | Max: %+.2f ms", 
+                             drift_us / 1000.0f, 
+                             syncStats.avg_drift_us / 1000.0f,
+                             syncStats.max_abs_drift_us / 1000.0f);
+                
+                if (syncStats.estimated_latency_us > 0) {
+                    float rtt_ms = (syncStats.estimated_latency_us * 2.0f) / 1000.0f;
+                    Serial.printf(" | RTT: ±%.2f ms | Comp: +%.2f ms", 
+                                 rtt_ms,
+                                 syncStats.estimated_latency_us / 1000.0f);
+                }
+                Serial.println();
+            }
+            
+            // Reset des stats tous les 100 syncs pour éviter l'accumulation
+            if (syncStats.sync_count % 100 == 0) {
+                syncStats.max_abs_drift_us = 0;
             }
             
             syncStats.last_sync_timestamp = master_sec;
             lastSyncSeconds = master_sec;
             lastSyncMicros = micros();
-            
-            // Afficher les statistiques de synchronisation
-            Serial.printf("⏰ Time sync #%u: %u.%06u\n", 
-                         syncStats.sync_count, master_sec, master_us);
-            Serial.printf("   └─ Drift: %+.3f ms | Avg: %+.3f ms", 
-                         drift_us / 1000.0f, syncStats.avg_drift_ms);
-            
-            if (syncStats.estimated_latency_us > 0) {
-                Serial.printf(" | Latency comp: %.2f ms", 
-                             syncStats.estimated_latency_us / 1000.0f);
-            }
-            Serial.println();
             
         } else {
             // Ancienne méthode (compatibilité)
