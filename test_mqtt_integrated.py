@@ -9,8 +9,10 @@ import threading
 import time
 import sys
 import socket
+import os
+import platform
 
-# ========== CONFIGURATION ==========
+# ========== CONFIGURATION ========== 
 MQTT_PORT = 1883
 MQTT_BASE_TOPIC = "esp32/io"
 RELAY_NAMES = ["RelaisK1", "RelaisK2"]
@@ -125,32 +127,15 @@ def toggle_all(client):
         turn_off(client, relay)
         time.sleep(0.2)
 
-# ========== PROGRAMME PRINCIPAL ==========
-def main():
-    """Fonction principale"""
-    print("="*60)
-    print("ESP32 IO Controller - Script de Test MQTT")
-    print("="*60)
-    
-    local_ip = get_local_ip()
-    
-    import paho.mqtt.client as mqtt
-import threading
-import time
-import sys
-import socket
-import os
-import platform
-
-# ========== CONFIGURATION ========== 
-MQTT_PORT = 1883
-# ... existing code ...
-def toggle_all(client):
-    """Active puis désactive tous les relais"""
-# ... existing code ...
-    for relay in RELAY_NAMES:
-        turn_off(client, relay)
-        time.sleep(0.2)
+def publish_time(client):
+    """Publie le timestamp actuel sur le topic de synchronisation"""
+    while True:
+        if client.is_connected():
+            timestamp = int(time.time())
+            topic = f"{MQTT_BASE_TOPIC}/time/sync"
+            client.publish(topic, str(timestamp), qos=0)
+            # print(f"-> Time published: {timestamp}") # Décommenter pour debug
+        time.sleep(60) # Publie toutes les 60 secondes
 
 def restart_mosquitto():
     """Redémarre le service Mosquitto pour s'assurer qu'il est bien lancé."""
@@ -187,7 +172,7 @@ def restart_mosquitto():
 # ========== PROGRAMME PRINCIPAL ========== 
 def main():
     """Fonction principale"""
-# ... existing code ...
+    print("="*60)
     print("ESP32 IO Controller - Script de Test MQTT")
     print("="*60)
     
@@ -231,6 +216,10 @@ def main():
         # Démarrer la boucle réseau en arrière-plan
         client.loop_start()
         
+        # Démarrer le thread pour la publication de l'heure
+        time_thread = threading.Thread(target=publish_time, args=(client,), daemon=True)
+        time_thread.start()
+
         # Attendre que la connexion soit établie
         time.sleep(1)
         

@@ -2,14 +2,17 @@
 #include "config.h"
 #include "mqtt.h"
 #include <ElegantOTA.h>
+#include <NTPClient.h>
 
 extern Config config;
 extern IOPin ioPins[];
 extern int ioPinCount;
 extern AccessLog accessLogs[];
+extern NTPClient timeClient;
 
 extern void saveConfig();
 extern void saveIOs();
+extern void setupNTP();
 
 void setupWebServer() {
   // Page principale
@@ -26,6 +29,15 @@ void setupWebServer() {
     doc["mqtt"] = (mqttEnabled ? mqttClient.connected() : false);
     doc["wifi"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = WiFi.localIP().toString();
+    
+    // Get formatted time
+    time_t now;
+    struct tm * timeinfo;
+    time(&now);
+    timeinfo = localtime(&now);
+    char timeStr[20];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", timeinfo);
+    doc["time"] = timeStr;
     
     // Add IOs status
     JsonArray ios = doc["ios"].to<JsonArray>();
@@ -191,6 +203,49 @@ void setupWebServer() {
       request->send(200, "application/json", "{\"message\":\"Configuration enregistrée\"}");
     }
   );
+
+  // API - Get NTP config
+  server.on("/api/ntp", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("API: GET /api/ntp");
+    JsonDocument doc;
+
+    time_t now;
+    struct tm * timeinfo;
+    time(&now);
+    timeinfo = localtime(&now);
+    char timeStr[20];
+    strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", timeinfo);
+    doc["time"] = timeStr;
+
+    doc["gmtOffset"] = config.gmtOffset_sec;
+    doc["daylightOffset"] = config.daylightOffset_sec;
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+
+  // API - Save NTP config
+  server.on("/api/ntp", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      Serial.println("API: POST /api/ntp");
+      JsonDocument doc;
+      deserializeJson(doc, (const char*)data);
+      
+      config.gmtOffset_sec = doc["gmtOffset"] | 3600;
+      config.daylightOffset_sec = doc["daylightOffset"] | 3600;
+      
+      saveConfig();
+      
+      request->send(200, "application/json", "{\"message\":\"Configuration NTP enregistrée\"}");
+    }
+  );
+
+  // API - Force NTP sync
+  server.on("/api/ntp/sync", HTTP_POST, [](AsyncWebServerRequest *request){
+    Serial.println("API: POST /api/ntp/sync - DEPRECATED");
+    request->send(200, "application/json", "{\"message\":\"La synchronisation se fait via MQTT maintenant.\"}");
+  });
   
   // API - Activer MQTT (ne lance la connexion que lorsque activé)
   server.on("/api/mqtt/enable", HTTP_POST, [](AsyncWebServerRequest *request){

@@ -6,7 +6,6 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
-#include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <LittleFS.h>
 
@@ -18,8 +17,6 @@ AsyncWebServer server(80);
 // WiFiClient and mqttClient are now defined in src/mqtt.cpp
 Preferences preferences;
 WiFiManager wifiManager;
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
 
 Config config;
 IOPin ioPins[MAX_IOS];
@@ -202,7 +199,7 @@ void setup() {
   //Serial.println("LittleFS mounted successfully.");
 
   // Setup NTP
-  //setupNTP();
+  setupNTP();
 
   // Setup MQTT
   setupMQTT();
@@ -229,7 +226,7 @@ void loop() {
     }
   }
 
-  timeClient.update();
+  //timeClient.update();
   handleIOs();
   ElegantOTA.loop();
   delay(10);
@@ -247,8 +244,7 @@ void loadConfig() {
   preferences.getString("mqttTop", config.mqttTopic, sizeof(config.mqttTopic));
   if (strlen(config.mqttTopic) == 0) strcpy(config.mqttTopic, "esp32/io");
 
-  preferences.getString("ntpSrv", config.ntpServer, sizeof(config.ntpServer));
-  if (strlen(config.ntpServer) == 0) strcpy(config.ntpServer, "pool.ntp.org");
+  // NTP settings are now for display and offset, not for server connection
   config.gmtOffset_sec = preferences.getLong("gmtOffset", 3600);
   config.daylightOffset_sec = preferences.getInt("daylightOff", 3600);
 
@@ -263,7 +259,7 @@ void saveConfig() {
   preferences.putString("mqttUser", config.mqttUser);
   preferences.putString("mqttPass", config.mqttPassword);
   preferences.putString("mqttTop", config.mqttTopic);
-  preferences.putString("ntpSrv", config.ntpServer);
+  //preferences.putString("ntpSrv", config.ntpServer); // No longer needed
   preferences.putLong("gmtOffset", config.gmtOffset_sec);
   preferences.putInt("daylightOff", config.daylightOffset_sec);
   preferences.putBool("init", true);
@@ -304,13 +300,9 @@ void applyIOPinModes() {
 
 // ===== NTP FUNCTIONS =====
 void setupNTP() {
-  timeClient.begin();
-  timeClient.setTimeOffset(config.gmtOffset_sec);
-  timeClient.setUpdateInterval(60000); // Update every minute
-  timeClient.forceUpdate();
-  Serial.println("NTP client setup.");
-  Serial.print("Current time: ");
-  Serial.println(timeClient.getFormattedTime());
+  // NTP is now handled via MQTT, this function is kept for potential future use
+  // but is left empty to prevent DNS lookups.
+  Serial.println("NTP setup is now handled via MQTT time synchronization.");
 }
 
 // ===== I/O HANDLING =====

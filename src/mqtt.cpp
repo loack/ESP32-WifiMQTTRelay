@@ -54,6 +54,20 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         }
     }
 
+    // Handle time synchronization
+    if (topicStr.endsWith("time/sync")) {
+        // Convert message to long
+        unsigned long unix_time = atol(message);
+        if (unix_time > 1000000000) { // Basic validation
+            timeval tv;
+            tv.tv_sec = unix_time;
+            tv.tv_usec = 0;
+            settimeofday(&tv, nullptr);
+            Serial.printf("Time synchronized from MQTT: %s\n", message);
+        }
+        return; // Message handled
+    }
+
     Serial.printf("Received command for unknown pin '%s'\n", pinName.c_str());
 }
 
@@ -71,9 +85,14 @@ void reconnectMQTT() {
     Serial.println("connected");
     
     // Subscribe to control topics
-    String topic = String(config.mqttTopic) + "/control/#";
-    mqttClient.subscribe(topic.c_str());
-    Serial.printf("Subscribed to %s\n", topic.c_str());
+    String controlTopic = String(config.mqttTopic) + "/control/#";
+    mqttClient.subscribe(controlTopic.c_str());
+    Serial.printf("Subscribed to %s\n", controlTopic.c_str());
+
+    // Subscribe to time sync topic
+    String timeTopic = String(config.mqttTopic) + "/time/sync";
+    mqttClient.subscribe(timeTopic.c_str());
+    Serial.printf("Subscribed to %s\n", timeTopic.c_str());
 
     // Publish current state of all pins
     for (int i = 0; i < ioPinCount; i++) {

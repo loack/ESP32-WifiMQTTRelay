@@ -125,6 +125,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <button class="tab active" onclick="switchTab(event, 'status')">Statut & Contrôle</button>
             <button class="tab" onclick="switchTab(event, 'ios')">Configuration I/O</button>
             <button class="tab" onclick="switchTab(event, 'config')">Configuration MQTT</button>
+            <button class="tab" onclick="switchTab(event, 'ntp')">NTP & Heure</button>
             <button class="tab" onclick="switchTab(event, 'update')">Mise à Jour</button>
         </div>
         
@@ -145,6 +146,10 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <div class="status-item">
                             <span>MQTT</span>
                             <span id="mqtt-status">...</span>
+                        </div>
+                         <div class="status-item">
+                            <span>Heure Locale</span>
+                            <span id="local-time">...</span>
                         </div>
                     </div>
                 </div>
@@ -240,6 +245,32 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <button class="btn btn-danger" onclick="disableMQTT()">Désactiver MQTT</button>
                 </div>
             </div>
+
+            <!-- TAB NTP -->
+            <div id="ntp" class="tab-content">
+                <h2>Configuration Heure</h2>
+                <div class="card">
+                    <h3>Statut de l'heure</h3>
+                    <div class="status-item">
+                        <span>Heure locale ESP32</span>
+                        <span id="ntp-time">...</span>
+                    </div>
+                     <p style="font-size: 12px; color: #888; margin-top: 10px;">L'heure est synchronisée via MQTT.</p>
+                </div>
+
+                <div class="card" style="margin-top: 30px;">
+                    <h3>Configuration Fuseau Horaire</h3>
+                    <div class="form-group">
+                        <label>Fuseau horaire (secondes)</label>
+                        <input type="number" id="ntp-offset" placeholder="Ex: 3600 pour GMT+1">
+                    </div>
+                     <div class="form-group">
+                        <label>Heure d'été (secondes)</label>
+                        <input type="number" id="ntp-daylight" placeholder="Ex: 3600 pour +1h">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveNTPConfig()">💾 Enregistrer la Configuration</button>
+                </div>
+            </div>
             
             <!-- TAB UPDATE -->
             <div id="update" class="tab-content">
@@ -266,6 +297,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (tabName === 'status') loadStatus();
             if (tabName === 'ios') loadIOs();
             if (tabName === 'config') loadConfig();
+            if (tabName === 'ntp') loadNTP();
         }
         
         function loadStatus() {
@@ -275,6 +307,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('wifi-status').innerHTML = data.wifi ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
                 document.getElementById('ip-address').textContent = data.ip;
                 document.getElementById('mqtt-status').innerHTML = data.mqtt ? '<span class="badge badge-success">Connecté</span>' : '<span class="badge badge-danger">Déconnecté</span>';
+                document.getElementById('local-time').textContent = data.time;
                 
                 const outputsDiv = document.getElementById('outputs-control');
                 const inputsDiv = document.getElementById('inputs-status');
@@ -414,6 +447,39 @@ const char index_html[] PROGMEM = R"rawliteral(
             })
             .then(r => r.json())
             .then(data => alert(data.message || 'Configuration enregistrée'));
+        }
+
+        function loadNTP() {
+            fetch('/api/ntp')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('ntp-time').textContent = data.time;
+                document.getElementById('ntp-offset').value = data.gmtOffset;
+                document.getElementById('ntp-daylight').value = data.daylightOffset;
+            });
+        }
+
+        function saveNTPConfig() {
+            const config = {
+                gmtOffset: parseInt(document.getElementById('ntp-offset').value),
+                daylightOffset: parseInt(document.getElementById('ntp-daylight').value)
+            };
+            
+            fetch('/api/ntp', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            })
+            .then(r => r.json())
+            .then(data => {
+                alert(data.message || 'Configuration enregistrée');
+                loadNTP();
+            });
+        }
+
+        function syncNTP() {
+            // This function is deprecated as sync is handled by MQTT
+            alert("La synchronisation est maintenant gérée automatiquement via MQTT.");
         }
 
         function enableMQTT() {
