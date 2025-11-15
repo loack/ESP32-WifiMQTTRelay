@@ -169,6 +169,25 @@ def restart_mosquitto():
         print("\nℹ️  Le redémarrage automatique de Mosquitto n'est implémenté que pour Windows.")
         return True
 
+def check_and_restart_mosquitto(host, port):
+    """Vérifie si le broker est accessible, sinon tente de le redémarrer."""
+    if platform.system() != "Windows":
+        print("\nℹ️  La vérification/redémarrage de Mosquitto n'est implémenté que pour Windows.")
+        return
+
+    print(f"\n🔍 Vérification du broker à l'adresse {host}:{port}...")
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            print("✓ Le broker MQTT est accessible.")
+            return
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        print("✗ Le broker MQTT ne répond pas. Tentative de redémarrage...")
+        if not restart_mosquitto():
+            input("\nAppuyez sur Entrée pour continuer malgré l'échec du redémarrage...")
+        else:
+            # Petite pause pour laisser le temps au broker de s'initialiser complètement
+            time.sleep(3)
+
 # ========== PROGRAMME PRINCIPAL ========== 
 def main():
     """Fonction principale"""
@@ -176,14 +195,12 @@ def main():
     print("ESP32 IO Controller - Script de Test MQTT")
     print("="*60)
     
-    # Tenter de redémarrer Mosquitto
-    if not restart_mosquitto():
-        input("\nAppuyez sur Entrée pour continuer malgré l'échec du redémarrage...")
-
     local_ip = get_local_ip()
     
+    # Vérifier si le broker est en ligne, sinon le redémarrer
+    check_and_restart_mosquitto(local_ip, MQTT_PORT)
+
     print(f"\n✅ L'adresse IP de ce PC est: {local_ip}")
-    print(f"   L'adresse IP de ce PC est: {local_ip}")
     
     print("\n" + "="*60)
     print("📋 CONFIGURATION REQUISE POUR L'ESP32")
