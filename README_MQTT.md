@@ -138,3 +138,20 @@ Explications et points importants :
 
 Si tu veux, ajoute ici la sortie de `ip route show`, `ip addr`, ou du moniteur série de l'ESP (IP Address / Gateway) et je t'aide à rendre la route persistante ou à corriger la configuration réseau.
 
+
+Installation de Mosquitto (Broker MQTT)
+Sur Ubuntu/Debian :
+sudo apt update
+sudo apt install mosquitto mosquitto-clients
+
+Démarrer et activer Mosquitto :
+sudo systemctl start mosquitto
+sudo systemctl enable mosquitto
+
+Vérifier le statut :
+sudo systemctl status mosquitto
+
+Installation de Paho-MQTT (Client Python)
+Avec pip :
+
+pip install paho-mqtt
