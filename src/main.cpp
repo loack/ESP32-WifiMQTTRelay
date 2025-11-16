@@ -137,6 +137,18 @@ void setup() {
   wifiManager.setConnectRetries(3);         // 3 tentatives de connexion
   wifiManager.setDebugOutput(true);         // Activer le debug
   
+  // Custom parameters for static IP
+  char useStaticIP_char[2] = { config.useStaticIP ? 'T' : 'F', 0 };
+  WiFiManagerParameter custom_use_static_ip("use_static_ip", "Use Static IP", useStaticIP_char, 2, "type='checkbox'");
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP", config.staticIP, 40);
+  WiFiManagerParameter custom_static_gateway("static_gateway", "Static Gateway", config.staticGateway, 40);
+  WiFiManagerParameter custom_static_subnet("static_subnet", "Static Subnet", config.staticSubnet, 40);
+
+  wifiManager.addParameter(&custom_use_static_ip);
+  wifiManager.addParameter(&custom_static_ip);
+  wifiManager.addParameter(&custom_static_gateway);
+  wifiManager.addParameter(&custom_static_subnet);
+
   // Vérifier triple appui pour reset WiFi
   if (checkTriplePress()) {
     Serial.println("\n⚠⚠⚠ RESETTING WiFi credentials ⚠⚠⚠");
@@ -192,6 +204,13 @@ void setup() {
     ESP.restart();
   }
   
+  // Save the custom parameters
+  config.useStaticIP = (strcmp(custom_use_static_ip.getValue(), "T") == 0);
+  strcpy(config.staticIP, custom_static_ip.getValue());
+  strcpy(config.staticGateway, custom_static_gateway.getValue());
+  strcpy(config.staticSubnet, custom_static_subnet.getValue());
+  saveConfig();
+
   // Connexion réussie - réinitialiser le compteur d'échecs
   preferences.putInt("wifiFailCount", 0);
   blinkStatusLED(3, 100);  // Signal de succès
