@@ -42,9 +42,16 @@ void handleIOs(void *pvParameters); // Modified for FreeRTOS
 void setupWebServer();
 void blinkStatusLED(int times, int delayMs);
 void processScheduledCommands();
+void saveConfigCallback();
 
 // ===== FreeRTOS Task Handles =====
 TaskHandle_t ioTaskHandle = NULL;
+
+// ===== Global WiFiManager parameters (needed for callback) =====
+WiFiManagerParameter* g_custom_use_static_ip = nullptr;
+WiFiManagerParameter* g_custom_static_ip = nullptr;
+WiFiManagerParameter* g_custom_static_gateway = nullptr;
+WiFiManagerParameter* g_custom_static_subnet = nullptr;
 
 // ===== FONCTION RESET WiFi =====
 // Fonction pour détecter 3 appuis sur le bouton BOOT
@@ -85,6 +92,41 @@ bool checkTriplePress() {
   return false;
 }
 
+// ===== CALLBACK POUR SAUVEGARDER LA CONFIGURATION =====
+// Cette fonction est appelée par WiFiManager UNIQUEMENT quand on sauvegarde
+// de nouveaux paramètres via le portail de configuration
+void saveConfigCallback() {
+  Serial.println("\n[CONFIG] Saving new WiFi configuration parameters...");
+  
+  if (g_custom_use_static_ip && g_custom_static_ip && g_custom_static_gateway && g_custom_static_subnet) {
+    // Sauvegarder les paramètres réseau
+    // Pour les checkbox, on doit vérifier si la valeur existe et n'est pas vide
+    const char* checkboxValue = g_custom_use_static_ip->getValue();
+    Serial.printf("[DEBUG] Checkbox raw value: '%s'\n", checkboxValue);
+    
+    // Une checkbox cochée renvoie "T", non cochée renvoie une chaîne vide ""
+    config.useStaticIP = (strlen(checkboxValue) > 0 && strcmp(checkboxValue, "T") == 0);
+    
+    // Si des valeurs IP sont fournies, on active automatiquement le mode statique
+    const char* ipValue = g_custom_static_ip->getValue();
+    if (strlen(ipValue) > 0 && strcmp(ipValue, "0.0.0.0") != 0) {
+      config.useStaticIP = true;
+      Serial.println("[DEBUG] IP address provided, forcing static IP mode ON");
+    }
+    
+    strcpy(config.staticIP, g_custom_static_ip->getValue());
+    strcpy(config.staticGateway, g_custom_static_gateway->getValue());
+    strcpy(config.staticSubnet, g_custom_static_subnet->getValue());
+    
+    Serial.println("[CONFIG] Network parameters updated:");
+    Serial.printf("  - Use Static IP: %s\n", config.useStaticIP ? "true" : "false");
+    Serial.printf("  - Static IP: %s\n", config.staticIP);
+    Serial.printf("  - Static Gateway: %s\n", config.staticGateway);
+    Serial.printf("  - Static Subnet: %s\n", config.staticSubnet);
+    
+    saveConfig();
+  }
+}
 
 // ===== SETUP =====
 
@@ -139,15 +181,18 @@ void setup() {
   
   // Custom parameters for static IP
   char useStaticIP_char[2] = { config.useStaticIP ? 'T' : 'F', 0 };
-  WiFiManagerParameter custom_use_static_ip("use_static_ip", "Use Static IP", useStaticIP_char, 2, "type='checkbox'");
-  WiFiManagerParameter custom_static_ip("static_ip", "Static IP", config.staticIP, 40);
-  WiFiManagerParameter custom_static_gateway("static_gateway", "Static Gateway", config.staticGateway, 40);
-  WiFiManagerParameter custom_static_subnet("static_subnet", "Static Subnet", config.staticSubnet, 40);
+  g_custom_use_static_ip = new WiFiManagerParameter("use_static_ip", "Use Static IP", useStaticIP_char, 2, "type='checkbox'");
+  g_custom_static_ip = new WiFiManagerParameter("static_ip", "Static IP", config.staticIP, 40);
+  g_custom_static_gateway = new WiFiManagerParameter("static_gateway", "Static Gateway", config.staticGateway, 40);
+  g_custom_static_subnet = new WiFiManagerParameter("static_subnet", "Static Subnet", config.staticSubnet, 40);
 
-  wifiManager.addParameter(&custom_use_static_ip);
-  wifiManager.addParameter(&custom_static_ip);
-  wifiManager.addParameter(&custom_static_gateway);
-  wifiManager.addParameter(&custom_static_subnet);
+  wifiManager.addParameter(g_custom_use_static_ip);
+  wifiManager.addParameter(g_custom_static_ip);
+  wifiManager.addParameter(g_custom_static_gateway);
+  wifiManager.addParameter(g_custom_static_subnet);
+  
+  // Enregistrer le callback pour sauvegarder les paramètres
+  wifiManager.setSaveParamsCallback(saveConfigCallback);
 
   // Vérifier triple appui pour reset WiFi
   if (checkTriplePress()) {
@@ -166,21 +211,24 @@ void setup() {
   Serial.println("No password required");
   Serial.println("Connect and configure WiFi at: http://192.168.4.1\n");
   
-  // Configuration WiFi pour compatibilité Freebox (juste avant autoConnect)
- // WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Réduire la puissance pour éviter les timeouts
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
   
+  // Si une IP statique est configurée, on l'applique AVANT de tenter la connexion.
+  // C'est plus fiable, notamment sur certains réseaux comme Freebox.
+  Serial.printf("[DEBUG] Use Static IP mode: %s\n", config.useStaticIP ? "true" : "false");
   if (config.useStaticIP) {
-    IPAddress localIP, gateway, subnet, dns1(8, 8, 8, 8);
-    localIP.fromString(config.staticIP);
-    gateway.fromString(config.staticGateway);
-    subnet.fromString(config.staticSubnet);
-    if (WiFi.config(localIP, gateway, subnet, dns1) == false) {
-      Serial.println("⚠️ Static IP Configuration Failed");
+    IPAddress localIP, gateway, subnet, dns1(8, 8, 8, 8); // DNS Google en fallback
+    if (localIP.fromString(config.staticIP) && gateway.fromString(config.staticGateway) && subnet.fromString(config.staticSubnet)) {
+      Serial.println("Applying static IP configuration BEFORE WiFi connection...");
+      if (WiFi.config(localIP, gateway, subnet, dns1)) {
+        Serial.print("✓ Static IP pre-configured: ");
+        Serial.println(localIP);
+      } else {
+        Serial.println("⚠️ Static IP pre-configuration failed!");
+      }
     } else {
-      Serial.print("✓ Static IP configured: ");
-      Serial.println(localIP);
+        Serial.println("⚠️ Invalid static IP settings in config!");
     }
   }
   
@@ -204,17 +252,18 @@ void setup() {
     ESP.restart();
   }
   
-  // Save the custom parameters
-  config.useStaticIP = (strcmp(custom_use_static_ip.getValue(), "T") == 0);
-  strcpy(config.staticIP, custom_static_ip.getValue());
-  strcpy(config.staticGateway, custom_static_gateway.getValue());
-  strcpy(config.staticSubnet, custom_static_subnet.getValue());
-  saveConfig();
+  // NOTE: Les paramètres sont maintenant sauvegardés dans saveConfigCallback()
+  // qui est appelé automatiquement par WiFiManager quand nécessaire.
+  
+  // Sauvegarder le SSID et mot de passe pour le debug
+  preferences.putString("wifiSSID", WiFi.SSID().c_str());
+  preferences.putString("wifiPass", WiFi.psk().c_str());
 
   // Connexion réussie - réinitialiser le compteur d'échecs
   preferences.putInt("wifiFailCount", 0);
   blinkStatusLED(3, 100);  // Signal de succès
   Serial.println("\n✓✓✓ WiFi CONNECTED ✓✓✓");
+  Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
   
@@ -356,6 +405,22 @@ void loadConfig() {
   preferences.getString("staticIP", config.staticIP, sizeof(config.staticIP));
   preferences.getString("staticGW", config.staticGateway, sizeof(config.staticGateway));
   preferences.getString("staticSN", config.staticSubnet, sizeof(config.staticSubnet));
+
+  Serial.println("[DEBUG] Loaded network configuration:");
+  Serial.printf("  - Use Static IP: %s\n", config.useStaticIP ? "true" : "false");
+  Serial.printf("  - Static IP: %s\n", config.staticIP);
+  Serial.printf("  - Static Gateway: %s\n", config.staticGateway);
+  Serial.printf("  - Static Subnet: %s\n", config.staticSubnet);
+  
+  // Debug WiFi credentials (optionnel, commentez si sensible)
+  char ssid[64];
+  char password[64];
+  preferences.getString("wifiSSID", ssid, sizeof(ssid));
+  preferences.getString("wifiPass", password, sizeof(password));
+  if (strlen(ssid) > 0) {
+    Serial.printf("[DEBUG] Saved WiFi SSID: %s\n", ssid);
+    Serial.printf("[DEBUG] Saved WiFi Password: %s\n", strlen(password) > 0 ? "***set***" : "(empty)");
+  }
 
   preferences.getString("adminPw", config.adminPassword, sizeof(config.adminPassword));
   if (strlen(config.adminPassword) == 0) strcpy(config.adminPassword, "admin");
