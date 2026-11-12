@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
 #include <ESPAsyncWebServer.h>
+#include "fw_version.h"
 
 extern AsyncWebServer server;
 extern Config config;
@@ -22,6 +23,15 @@ void setupWebServer() {
     request->send(SPIFFS, "/index.html", "text/html");
   });
   
+  // Identite du firmware (variante, commit, date, indicateurs)
+  server.on("/api/info", HTTP_GET, [](AsyncWebServerRequest *request){
+    JsonDocument doc;
+    fwInfoFill(doc.to<JsonObject>());
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+  });
+
   // API pour le statut système complet
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
     JsonDocument doc;

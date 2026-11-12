@@ -6,6 +6,7 @@
 #include <sys/time.h>
 
 #include <WiFi.h>
+#include "fw_version.h"
 
 // define the network client and the MQTT client here (single place)
 WiFiClient wifiClient;
@@ -262,6 +263,12 @@ void reconnectMQTT() {
     char availabilityTopic[128];
     snprintf(availabilityTopic, sizeof(availabilityTopic), "%s/availability", config.deviceName);
     publishMQTT(availabilityTopic, "online", true);
+
+    // Identite du firmware (retenue) : <device>/info
+    char infoTopic[128], infoPayload[200];
+    snprintf(infoTopic, sizeof(infoTopic), "%s/info", config.deviceName);
+    fwInfoMqtt(infoPayload, sizeof(infoPayload));
+    publishMQTT(infoTopic, infoPayload, true);
 
     // Subscribe to control topics
     String controlTopic = String(config.deviceName) + "/control/#";
